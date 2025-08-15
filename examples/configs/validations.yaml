@@ -1,0 +1,185 @@
+# SQLTest Pro - Validation Configuration
+# Comprehensive validation rules for data quality
+
+# Import database configuration
+include:
+  - database.yaml
+
+# Global validation settings
+settings:
+  fail_fast: false  # Continue running all validations even if one fails
+  parallel_execution: true
+  max_workers: 4
+  report_format: html
+  output_dir: ./validation_reports
+
+# Field-level validations
+field_validations:
+  # User table validations
+  - table: users
+    validations:
+      - column: user_id
+        rules:
+          - type: not_null
+          - type: unique
+          - type: data_type
+            expected: integer
+            
+      - column: email
+        rules:
+          - type: not_null
+          - type: unique
+          - type: regex
+            pattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            error_message: "Invalid email format"
+          - type: length
+            max: 255
+            
+      - column: age
+        rules:
+          - type: range
+            min: 0
+            max: 150
+            inclusive: true
+          - type: not_null
+            condition: "status = 'active'"  # Conditional validation
+            
+      - column: status
+        rules:
+          - type: enum
+            values: ['active', 'inactive', 'suspended', 'deleted']
+          - type: not_null
+            
+      - column: created_at
+        rules:
+          - type: not_null
+          - type: date_range
+            min: '2020-01-01'
+            max: 'current_date'
+            
+  # Orders table validations
+  - table: orders
+    validations:
+      - column: order_total
+        rules:
+          - type: range
+            min: 0
+            max: 1000000
+          - type: decimal_precision
+            precision: 10
+            scale: 2
+            
+      - column: order_date
+        rules:
+          - type: not_future_date
+          - type: not_null
+
+# Business rule validations
+business_rules:
+  - name: "Order totals match line items"
+    description: "Ensure order total equals sum of line items"
+    severity: critical
+    query: |
+      SELECT 
+        o.order_id,
+        o.order_total,
+        COALESCE(SUM(oi.quantity * oi.unit_price), 0) as calculated_total,
+        ABS(o.order_total - COALESCE(SUM(oi.quantity * oi.unit_price), 0)) as difference
+      FROM orders o
+      LEFT JOIN order_items oi ON o.order_id = oi.order_id
+      GROUP BY o.order_id, o.order_total
+      HAVING ABS(o.order_total - COALESCE(SUM(oi.quantity * oi.unit_price), 0)) > 0.01
+    expect: empty_result
+    
+  - name: "No orphaned order items"
+    description: "All order items must belong to valid orders"
+    severity: high
+    query: |
+      SELECT oi.order_item_id, oi.order_id
+      FROM order_items oi
+      LEFT JOIN orders o ON oi.order_id = o.order_id
+      WHERE o.order_id IS NULL
+    expect: empty_result
+    
+  - name: "Customer email uniqueness"
+    description: "Active customers should have unique emails"
+    severity: medium
+    query: |
+      SELECT email, COUNT(*) as count
+      FROM users
+      WHERE status = 'active'
+      GROUP BY email
+      HAVING COUNT(*) > 1
+    expect: empty_result
+    
+  - name: "Recent orders have valid customers"
+    description: "Orders from last 30 days must have valid customer references"
+    severity: high
+    query: |
+      SELECT o.order_id, o.customer_id
+      FROM orders o
+      LEFT JOIN users u ON o.customer_id = u.user_id
+      WHERE o.order_date >= CURRENT_DATE - INTERVAL '30 days'
+        AND u.user_id IS NULL
+    expect: empty_result
+
+# Data type validations
+data_type_validations:
+  - table: products
+    columns:
+      - name: price
+        expected_type: DECIMAL(10,2)
+        nullable: false
+      - name: sku
+        expected_type: VARCHAR(50)
+        nullable: false
+      - name: description
+        expected_type: TEXT
+        nullable: true
+        
+# Custom validation functions
+custom_validations:
+  - name: "Validate phone numbers"
+    type: python
+    function: |
+      def validate_phone(value):
+          import re
+          if value is None:
+              return True
+          pattern = r'^\+?1?\d{9,15}$'
+          return bool(re.match(pattern, str(value).replace('-', '').replace(' ', '')))
+    apply_to:
+      - table: users
+        column: phone_number
+      - table: contacts
+        column: mobile
+
+# Validation schedules (for automated runs)
+schedules:
+  daily_critical:
+    cron: "0 6 * * *"  # 6 AM daily
+    validations:
+      - business_rules: [severity: critical]
+      - field_validations: [table: orders]
+      
+  weekly_full:
+    cron: "0 2 * * 0"  # 2 AM Sunday
+    validations: all
+
+# Alert configurations
+alerts:
+  email:
+    enabled: true
+    smtp_server: smtp.example.com
+    from: sqltest@example.com
+    to:
+      - data-team@example.com
+    on_failure: true
+    on_success: false
+    
+  slack:
+    enabled: true
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    channel: "#data-quality"
+    on_failure: true
+    mention_on_critical: "@data-team"

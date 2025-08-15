@@ -1,0 +1,244 @@
+# SQLTest Pro - Unit Test Configuration
+# Define unit tests for SQL code, stored procedures, and functions
+
+# Test suite metadata
+test_suite:
+  name: "E-commerce Database Unit Tests"
+  version: "1.0.0"
+  author: "Data Team"
+  database: test  # Reference to database.yaml
+
+# Global test settings
+settings:
+  isolation_level: READ_COMMITTED
+  timeout: 300  # seconds
+  continue_on_failure: true
+  generate_coverage: true
+  temp_schema: test_temp
+
+# Test fixtures (shared test data)
+fixtures:
+  users:
+    - user_id: 1
+      email: "test1@example.com"
+      username: "testuser1"
+      status: "active"
+      created_at: "2024-01-01"
+    - user_id: 2
+      email: "test2@example.com"
+      username: "testuser2"
+      status: "inactive"
+      created_at: "2024-01-02"
+      
+  products:
+    - product_id: 1
+      name: "Test Product 1"
+      price: 99.99
+      sku: "TEST-001"
+    - product_id: 2
+      name: "Test Product 2"
+      price: 149.99
+      sku: "TEST-002"
+
+# Unit tests
+unit_tests:
+  # Test stored procedures
+  - test_group: "Stored Procedures"
+    tests:
+      - name: "Test calculate_order_total procedure"
+        description: "Verify order total calculation includes tax and shipping"
+        setup:
+          - CREATE TEMP TABLE test_orders (order_id INT, subtotal DECIMAL(10,2), tax_rate DECIMAL(4,2), shipping DECIMAL(10,2))
+          - INSERT INTO test_orders VALUES (1, 100.00, 0.08, 10.00)
+        test:
+          query: CALL calculate_order_total(1)
+          assertions:
+            - type: query_result
+              expected_query: SELECT 118.00 as total  # 100 + (100 * 0.08) + 10
+              
+      - name: "Test update_inventory procedure"
+        description: "Verify inventory is correctly updated after order"
+        setup:
+          - CREATE TEMP TABLE test_inventory (product_id INT, quantity INT)
+          - INSERT INTO test_inventory VALUES (1, 100), (2, 50)
+          - CREATE TEMP TABLE test_order_items (order_id INT, product_id INT, quantity INT)
+          - INSERT INTO test_order_items VALUES (1, 1, 5), (1, 2, 3)
+        test:
+          query: CALL process_order_inventory(1)
+        assertions:
+          - type: row_count
+            table: test_inventory
+            where: "product_id = 1 AND quantity = 95"
+            expected: 1
+          - type: row_count
+            table: test_inventory
+            where: "product_id = 2 AND quantity = 47"
+            expected: 1
+        teardown:
+          - DROP TABLE test_inventory
+          - DROP TABLE test_order_items
+
+  # Test SQL functions
+  - test_group: "SQL Functions"
+    tests:
+      - name: "Test get_customer_lifetime_value function"
+        description: "Calculate total customer spending"
+        fixtures: [users]
+        setup:
+          - CREATE TEMP TABLE test_orders (order_id INT, customer_id INT, total DECIMAL(10,2), order_date DATE)
+          - INSERT INTO test_orders VALUES 
+            (1, 1, 100.00, '2024-01-01'),
+            (2, 1, 150.00, '2024-01-15'),
+            (3, 2, 200.00, '2024-01-20')
+        test:
+          query: SELECT get_customer_lifetime_value(1) as clv
+          assertions:
+            - type: equals
+              column: clv
+              expected: 250.00
+              
+      - name: "Test format_phone_number function"
+        description: "Verify phone number formatting"
+        parameterized:
+          - input: "1234567890"
+            expected: "(123) 456-7890"
+          - input: "+11234567890"
+            expected: "(123) 456-7890"
+          - input: "123-456-7890"
+            expected: "(123) 456-7890"
+        test:
+          query: SELECT format_phone_number('{{ input }}') as formatted
+          assertions:
+            - type: equals
+              column: formatted
+              expected: "{{ expected }}"
+
+  # Test views
+  - test_group: "Views"
+    tests:
+      - name: "Test active_customers view"
+        description: "Verify view returns only active customers"
+        fixtures: [users]
+        test:
+          query: SELECT COUNT(*) as count FROM active_customers
+          assertions:
+            - type: equals
+              column: count
+              expected: 1
+              
+      - name: "Test order_summary view"
+        description: "Verify order summary calculations"
+        setup:
+          - INSERT INTO orders (order_id, customer_id, order_date, total) VALUES
+            (1, 1, '2024-01-01', 100),
+            (2, 1, '2024-01-02', 150),
+            (3, 2, '2024-01-03', 200)
+        test:
+          query: |
+            SELECT customer_id, total_orders, total_amount 
+            FROM order_summary 
+            WHERE customer_id = 1
+          assertions:
+            - type: row
+              expected:
+                customer_id: 1
+                total_orders: 2
+                total_amount: 250.00
+
+  # Test triggers
+  - test_group: "Triggers"
+    tests:
+      - name: "Test audit_trail trigger"
+        description: "Verify audit records are created on updates"
+        setup:
+          - CREATE TABLE test_audit_log (table_name VARCHAR(50), action VARCHAR(10), user_id INT, timestamp TIMESTAMP)
+          - CREATE TABLE test_table (id INT, value VARCHAR(100))
+          - INSERT INTO test_table VALUES (1, 'original')
+        test:
+          query: UPDATE test_table SET value = 'updated' WHERE id = 1
+        assertions:
+          - type: row_count
+            table: test_audit_log
+            where: "table_name = 'test_table' AND action = 'UPDATE'"
+            expected: 1
+
+  # Test complex business logic
+  - test_group: "Business Logic"
+    tests:
+      - name: "Test discount calculation"
+        description: "Verify tiered discount calculation"
+        test_cases:
+          - name: "No discount under $100"
+            input:
+              order_total: 50.00
+              customer_tier: "bronze"
+            expected_discount: 0.00
+          - name: "5% discount for bronze over $100"
+            input:
+              order_total: 150.00
+              customer_tier: "bronze"
+            expected_discount: 7.50
+          - name: "10% discount for silver"
+            input:
+              order_total: 150.00
+              customer_tier: "silver"
+            expected_discount: 15.00
+        test:
+          query: SELECT calculate_discount({{ input.order_total }}, '{{ input.customer_tier }}') as discount
+          assertions:
+            - type: equals
+              column: discount
+              expected: "{{ expected_discount }}"
+
+# Mock data generation
+mocks:
+  - name: "Generate test orders"
+    type: random
+    count: 100
+    schema:
+      order_id: 
+        type: sequence
+        start: 1000
+      customer_id:
+        type: random_int
+        min: 1
+        max: 50
+      order_date:
+        type: random_date
+        start: "2024-01-01"
+        end: "2024-12-31"
+      total:
+        type: random_decimal
+        min: 10.00
+        max: 500.00
+        precision: 2
+
+# Coverage configuration
+coverage:
+  include:
+    - schema: public
+      objects: [functions, procedures, triggers]
+    - schema: analytics
+      objects: [views]
+  exclude:
+    - "test_*"
+    - "*_backup"
+  minimum_coverage: 80  # Fail if coverage is below 80%
+
+# Test execution order
+execution_order:
+  - test_group: "SQL Functions"  # Test pure functions first
+  - test_group: "Views"          # Then test views that might use functions
+  - test_group: "Stored Procedures"
+  - test_group: "Triggers"
+  - test_group: "Business Logic"
+
+# Performance benchmarks
+benchmarks:
+  - name: "Order calculation performance"
+    query: SELECT calculate_order_total(order_id) FROM orders LIMIT 1000
+    max_duration: 5  # seconds
+    
+  - name: "Customer search performance"
+    query: SELECT * FROM search_customers('john') LIMIT 100
+    max_duration: 1  # second

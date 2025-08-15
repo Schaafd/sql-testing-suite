@@ -1,0 +1,77 @@
+# SQLTest Pro - Database Configuration
+# This file defines database connections that can be used across all testing tools
+
+databases:
+  # Development database
+  dev:
+    type: postgresql
+    host: localhost
+    port: 5432
+    database: myapp_dev
+    username: dev_user
+    password: ${DEV_DB_PASSWORD}  # Environment variable
+    options:
+      sslmode: prefer
+      connect_timeout: 10
+
+  # Test database
+  test:
+    type: postgresql
+    host: localhost
+    port: 5432
+    database: myapp_test
+    username: test_user
+    password: ${TEST_DB_PASSWORD}
+    options:
+      sslmode: disable
+      
+  # Production database (read-only)
+  prod_readonly:
+    type: postgresql
+    host: prod-db.example.com
+    port: 5432
+    database: myapp_prod
+    username: readonly_user
+    password: ${PROD_DB_PASSWORD}
+    options:
+      sslmode: require
+      application_name: sqltest_pro
+      
+  # Local SQLite for quick testing
+  local_sqlite:
+    type: sqlite
+    path: ./test_data.db
+    
+  # MySQL example
+  mysql_db:
+    type: mysql
+    host: mysql.example.com
+    port: 3306
+    database: analytics
+    username: analyst
+    password: ${MYSQL_PASSWORD}
+    options:
+      charset: utf8mb4
+      
+  # Snowflake example
+  snowflake_dw:
+    type: snowflake
+    account: mycompany
+    warehouse: COMPUTE_WH
+    database: ANALYTICS
+    schema: PUBLIC
+    username: etl_user
+    password: ${SNOWFLAKE_PASSWORD}
+    role: ANALYST_ROLE
+
+# Connection pools configuration
+connection_pools:
+  default:
+    min_connections: 1
+    max_connections: 10
+    timeout: 30
+    retry_attempts: 3
+    retry_delay: 1
+
+# Default database for commands if not specified
+default_database: dev
