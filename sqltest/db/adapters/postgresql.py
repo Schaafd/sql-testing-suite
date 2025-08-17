@@ -73,59 +73,43 @@ class PostgreSQLAdapter(BaseAdapter):
     
     def _get_column_info_query(self, table_name: str, schema: Optional[str] = None) -> str:
         """Get PostgreSQL-specific query for column information."""
-        schema_condition = f"AND table_schema = '{schema}'" if schema else "AND table_schema = 'public'"
-        
+        schema_name = schema or 'public'
         return f"""
         SELECT 
             column_name,
             data_type,
             is_nullable,
             column_default,
-            character_maximum_length,
-            numeric_precision,
-            numeric_scale,
             ordinal_position
-        FROM information_schema.columns
-        WHERE table_name = '{table_name}' {schema_condition}
+        FROM information_schema.columns 
+        WHERE table_name = '{table_name}' 
+        AND table_schema = '{schema_name}'
         ORDER BY ordinal_position
         """
     
-    def get_schema_names(self) -> list[str]:
-        """Get list of schema names in the database."""
-        query = """
-        SELECT schema_name 
-        FROM information_schema.schemata 
-        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-        ORDER BY schema_name
-        """
-        result = self.execute_query(query)
-        return [row['schema_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
-    
     def get_table_names(self, schema: Optional[str] = None) -> list[str]:
-        """Get list of table names in the database or schema."""
-        schema_condition = f"table_schema = '{schema}'" if schema else "table_schema = 'public'"
-        
+        """Get list of table names in the database."""
+        schema_name = schema or 'public'
         query = f"""
         SELECT table_name
         FROM information_schema.tables
-        WHERE {schema_condition} AND table_type = 'BASE TABLE'
+        WHERE table_schema = '{schema_name}' AND table_type = 'BASE TABLE'
         ORDER BY table_name
         """
         result = self.execute_query(query)
         return [row['table_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
     
     def get_view_names(self, schema: Optional[str] = None) -> list[str]:
-        """Get list of view names in the database or schema."""
-        schema_condition = f"table_schema = '{schema}'" if schema else "table_schema = 'public'"
-        
+        """Get list of view names in the database."""
+        schema_name = schema or 'public'
         query = f"""
-        SELECT table_name
-        FROM information_schema.views
-        WHERE {schema_condition}
+        SELECT table_name as view_name
+        FROM information_schema.tables
+        WHERE table_schema = '{schema_name}' AND table_type = 'VIEW'
         ORDER BY table_name
         """
         result = self.execute_query(query)
-        return [row['table_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
+        return [row['view_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
     
     def get_function_names(self, schema: Optional[str] = None) -> list[str]:
         """Get list of function names in the database or schema."""

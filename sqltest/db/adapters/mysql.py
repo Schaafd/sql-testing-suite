@@ -74,62 +74,45 @@ class MySQLAdapter(BaseAdapter):
     
     def _get_column_info_query(self, table_name: str, schema: Optional[str] = None) -> str:
         """Get MySQL-specific query for column information."""
-        database_condition = f"AND table_schema = '{schema}'" if schema else f"AND table_schema = '{self.config.database}'"
-        
+        schema_name = schema or self.config.database
         return f"""
         SELECT 
             column_name,
             data_type,
             is_nullable,
             column_default,
-            character_maximum_length,
-            numeric_precision,
-            numeric_scale,
             ordinal_position,
-            column_type,
             column_key,
             extra
-        FROM information_schema.columns
-        WHERE table_name = '{table_name}' {database_condition}
+        FROM information_schema.columns 
+        WHERE table_name = '{table_name}' 
+        AND table_schema = '{schema_name}'
         ORDER BY ordinal_position
         """
     
-    def get_database_names(self) -> list[str]:
-        """Get list of database names on the MySQL server."""
-        query = """
-        SELECT schema_name 
-        FROM information_schema.schemata 
-        WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
-        ORDER BY schema_name
-        """
-        result = self.execute_query(query)
-        return [row['schema_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
-    
     def get_table_names(self, schema: Optional[str] = None) -> list[str]:
-        """Get list of table names in the database or schema."""
-        database_condition = f"table_schema = '{schema}'" if schema else f"table_schema = '{self.config.database}'"
-        
+        """Get list of table names in the database."""
+        schema_name = schema or self.config.database
         query = f"""
         SELECT table_name
         FROM information_schema.tables
-        WHERE {database_condition} AND table_type = 'BASE TABLE'
+        WHERE table_schema = '{schema_name}' AND table_type = 'BASE TABLE'
         ORDER BY table_name
         """
         result = self.execute_query(query)
         return [row['table_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
     
     def get_view_names(self, schema: Optional[str] = None) -> list[str]:
-        """Get list of view names in the database or schema."""
-        database_condition = f"table_schema = '{schema}'" if schema else f"table_schema = '{self.config.database}'"
-        
+        """Get list of view names in the database."""
+        schema_name = schema or self.config.database
         query = f"""
-        SELECT table_name
-        FROM information_schema.views
-        WHERE {database_condition}
+        SELECT table_name as view_name
+        FROM information_schema.tables
+        WHERE table_schema = '{schema_name}' AND table_type = 'VIEW'
         ORDER BY table_name
         """
         result = self.execute_query(query)
-        return [row['table_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
+        return [row['view_name'] for row in result.data.to_dict('records')] if not result.is_empty else []
     
     def get_function_names(self, schema: Optional[str] = None) -> list[str]:
         """Get list of function names in the database or schema."""
