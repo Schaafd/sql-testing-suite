@@ -53,7 +53,7 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(cli, ['validate', '--help'])
         assert result.exit_code == 0
-        assert 'validation rules' in result.output
+        assert 'field validation' in result.output
     
     def test_cli_test_help(self) -> None:
         """Test test command help."""
@@ -67,7 +67,7 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(cli, ['report', '--help'])
         assert result.exit_code == 0
-        assert 'Generate reports' in result.output
+        assert 'Generate comprehensive reports' in result.output
     
     def test_cli_init_help(self) -> None:
         """Test init command help."""
