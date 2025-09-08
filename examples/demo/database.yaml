@@ -1,0 +1,23 @@
+# Demo Database Configuration for SQLTest Pro
+# Simplified configuration using only local SQLite - no environment variables required
+
+databases:
+  # Demo SQLite database  
+  local_sqlite:
+    type: sqlite
+    path: ./test_data.db
+    options:
+      timeout: 30
+      check_same_thread: false
+
+# Connection pools configuration
+connection_pools:
+  default:
+    min_connections: 1
+    max_connections: 5
+    timeout: 30
+    retry_attempts: 3
+    retry_delay: 1
+
+# Default database for demo
+default_database: local_sqlite

@@ -1,0 +1,101 @@
+validation_rules:
+  email_validation:
+    description: Email field validation rules
+    apply_to_columns:
+    - email
+    rules:
+    - name: email_format
+      type: regex
+      pattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+      description: Validate email format using standard email regex
+      level: error
+      error_message: Invalid email format - must be valid email address
+    
+    - name: email_not_null
+      type: null_check
+      allow_null: false
+      description: Email addresses cannot be null
+      level: error
+      error_message: Email address is required
+
+  age_validation:
+    description: Age field validation rules
+    apply_to_columns:
+    - age
+    rules:
+    - name: age_range
+      type: range
+      min_value: 0
+      max_value: 120
+      inclusive: true
+      description: Age must be realistic (0-120 years)
+      level: error
+      error_message: Age must be between 0 and 120 years
+    
+    - name: age_not_null
+      type: null_check
+      allow_null: false
+      description: Age cannot be null
+      level: error
+      error_message: Age is required
+
+  name_validation:
+    description: Name field validation rules
+    apply_to_columns:
+    - name
+    rules:
+    - name: name_length
+      type: length
+      min_length: 2
+      max_length: 50
+      description: Name must be appropriate length
+      level: warning
+      error_message: Name must be between 2 and 50 characters
+    
+    - name: name_not_null
+      type: null_check
+      allow_null: false
+      description: Name cannot be null
+      level: error
+      error_message: Name is required
+
+  status_validation:
+    description: Status field validation rules
+    apply_to_columns:
+    - status
+    rules:
+    - name: status_enum
+      type: enum
+      allowed_values: [active, inactive, pending]
+      case_sensitive: false
+      description: Status must be one of the valid values
+      level: error
+      error_message: Status must be active, inactive, or pending
+    
+    - name: status_not_null
+      type: null_check
+      allow_null: false
+      description: Status cannot be null
+      level: error
+      error_message: Status is required
+
+  salary_validation:
+    description: Salary field validation rules
+    apply_to_columns:
+    - salary
+    rules:
+    - name: salary_positive
+      type: range
+      min_value: 0
+      max_value: 1000000
+      inclusive: true
+      description: Salary must be positive and reasonable
+      level: warning
+      error_message: Salary must be between 0 and 1,000,000
+    
+    - name: salary_null_allowed
+      type: null_check
+      allow_null: true
+      description: Salary can be null for contractors or interns
+      level: info
+      error_message: Salary is not specified

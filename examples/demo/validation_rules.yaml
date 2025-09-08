@@ -1,0 +1,113 @@
+validation_rules:
+  user_data_validation:
+    description: Comprehensive validation rules for user data in the demo
+    apply_to_columns:
+    - email
+    - age
+    - name
+    - status
+    - salary
+    rules:
+    # Email validation rules
+    - name: email_format
+      type: regex
+      pattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+      description: Validate email format using standard email regex
+      level: error
+      error_message: Invalid email format - must be valid email address
+    
+    - name: email_not_null
+      type: null_check
+      allow_null: false
+      description: Email addresses cannot be null
+      level: error
+      error_message: Email address is required
+    
+    # Age validation rules
+    - name: age_range
+      type: range
+      min_value: 0
+      max_value: 120
+      inclusive: true
+      description: Age must be realistic (0-120 years)
+      level: error
+      error_message: Age must be between 0 and 120 years
+    
+    - name: age_not_null
+      type: null_check
+      allow_null: false
+      description: Age cannot be null
+      level: error
+      error_message: Age is required
+    
+    # Name validation rules
+    - name: name_length
+      type: length
+      min_length: 2
+      max_length: 50
+      description: Name must be appropriate length
+      level: warning
+      error_message: Name must be between 2 and 50 characters
+    
+    - name: name_not_null
+      type: null_check
+      allow_null: false
+      description: Name cannot be null
+      level: error
+      error_message: Name is required
+    
+    # Status validation rules
+    - name: status_enum
+      type: enum
+      allowed_values: [active, inactive, pending]
+      case_sensitive: false
+      description: Status must be one of the valid values
+      level: error
+      error_message: Status must be active, inactive, or pending
+    
+    - name: status_not_null
+      type: null_check
+      allow_null: false
+      description: Status cannot be null
+      level: error
+      error_message: Status is required
+    
+    # Salary validation rules
+    - name: salary_positive
+      type: range
+      min_value: 0
+      max_value: 1000000
+      inclusive: true
+      description: Salary must be positive and reasonable
+      level: warning
+      error_message: Salary must be between 0 and 1,000,000
+    
+    - name: salary_null_allowed
+      type: null_check
+      allow_null: true
+      description: Salary can be null for contractors or interns
+      level: info
+      error_message: Salary is not specified
+
+  orders_data_validation:
+    description: Basic validation rules for orders table
+    apply_to_columns:
+    - amount
+    - product
+    rules:
+    - name: amount_positive
+      type: range
+      min_value: 0.01
+      max_value: 50000
+      inclusive: true
+      description: Order amount must be positive
+      level: error
+      error_message: Order amount must be greater than 0 and less than 50,000
+    
+    - name: product_not_empty
+      type: length
+      min_length: 1
+      max_length: 100
+      description: Product name must be specified
+      level: error
+      error_message: Product name cannot be empty and must be under 100 characters
