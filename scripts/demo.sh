@@ -41,6 +41,9 @@ fi
 
 print_info "Setting up demo database..."
 
+# Create data directory if it doesn't exist
+mkdir -p ./data
+
 # Remove existing database if it exists
 if [ -f "./data/test_data.db" ]; then
     rm "./data/test_data.db"
