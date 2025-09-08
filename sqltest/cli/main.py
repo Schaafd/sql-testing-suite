@@ -285,117 +285,123 @@ def profile_query(manager, db_name: str, query: str, sample: int) -> None:
 
 
 @cli.command()
-@click.option("--config", type=click.Path(exists=True), help="Path to validation rule set configuration")
+@click.option("--config", type=click.Path(exists=True), help="Path to field validation configuration")
 @click.option("--rule-set", help="Name of specific rule set to run")
 @click.option("--database", "-d", help="Database to validate (default: default database)")
 @click.option("--table", help="Specific table to validate")
 @click.option("--schema", "-s", help="Schema to validate (database-specific)")
-@click.option("--parallel", is_flag=True, help="Enable parallel rule execution")
+@click.option("--columns", help="Specific columns to validate (comma-separated)")
 @click.option("--fail-fast", is_flag=True, help="Stop on first critical failure")
-@click.option("--tags", help="Filter rules by tags (comma-separated)")
+@click.option("--sample-size", type=int, help="Limit number of rows to validate")
 @click.option("--output", "-o", type=click.Path(), help="Export results to JSON file")
-@click.option("--generate", is_flag=True, help="Auto-generate basic data quality rules")
+@click.option("--generate", is_flag=True, help="Create sample field validation configuration")
 @click.pass_context
 def validate(ctx: click.Context, config: str, rule_set: str, database: str, table: str, 
-             schema: str, parallel: bool, fail_fast: bool, tags: str, output: str, 
+             schema: str, columns: str, fail_fast: bool, sample_size: int, output: str, 
              generate: bool) -> None:
-    """✓ Run business rule validation.
+    """✓ Run field validation.
     
-    Validates data using business rules defined in YAML configuration files.
-    Supports data quality, referential integrity, and custom business logic rules.
+    Validates data using field validation rules defined in YAML configuration files.
+    Supports data quality checks, format validation, range validation, and custom rules.
     """
     try:
-        from sqltest.modules.business_rules import BusinessRuleValidator, quick_validate_table_data_quality
+        from sqltest.modules.field_validator import (
+            TableFieldValidator, save_sample_config, create_sample_config,
+            ValidationLevel
+        )
         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-        import time as time_module
+        import json
+        from pathlib import Path
         
         # Get configuration and database manager
         app_config = get_config(ctx.obj.get('config'))
         manager = get_connection_manager(app_config)
         db_name = database or ctx.obj.get('db') or app_config.default_database
         
-        console.print(f"[bold green]Business Rule Validation[/bold green]")
+        console.print(f"[bold green]🔍 Field Validation[/bold green]")
         console.print(f"Database: [cyan]{db_name}[/cyan]")
         if schema:
             console.print(f"Schema: [cyan]{schema}[/cyan]")
         if table:
             console.print(f"Table: [cyan]{table}[/cyan]")
+        if columns:
+            console.print(f"Columns: [cyan]{columns}[/cyan]")
+        if sample_size:
+            console.print(f"Sample Size: [yellow]{sample_size}[/yellow] rows")
         console.print()
         
-        # Handle auto-generation mode
+        # Handle sample configuration generation
         if generate:
-            if not table:
-                console.print("[red]Error: --table must be specified when using --generate[/red]")
-                return
+            output_file = output or "field_validation_rules.yaml"
+            output_path = Path(output_file)
             
-            console.print("[yellow]🔧 Auto-generating data quality rules...[/yellow]")
+            if output_path.exists():
+                if not click.confirm(f"File '{output_file}' exists. Overwrite?"):
+                    return
             
-            summary = quick_validate_table_data_quality(
-                db_manager=manager,
-                database_name=db_name,
-                table_name=table,
-                schema_name=schema
-            )
-            
-            show_validation_summary(summary)
-            
-            if output:
-                validator = BusinessRuleValidator(manager)
-                validator.export_results_to_json(summary, output)
-                console.print(f"[green]Results exported to: {output}[/green]")
-            
+            save_sample_config(output_file)
+            console.print(f"[green]✅ Sample field validation configuration created: {output_file}[/green]")
+            console.print("\n[yellow]Next steps:[/yellow]")
+            console.print("1. Edit the configuration file to match your validation needs")
+            console.print(f"2. Run validation: [cyan]sqltest validate --config {output_file} --table your_table[/cyan]")
             return
         
-        # Load rule sets
-        validator = BusinessRuleValidator(manager)
+        # Require either config file or table for validation
+        if not config and not table:
+            console.print("[red]Error: Either --config or --table must be specified (or use --generate for sample config)[/red]")
+            console.print("Use [cyan]sqltest validate --generate[/cyan] to create a sample configuration.")
+            return
         
+        # Create field validator
+        validator = TableFieldValidator(manager, strict_mode=fail_fast)
+        
+        # Load validation rules
         if config:
-            # Load from specific file
-            console.print(f"[blue]📋 Loading rule set from: {config}[/blue]")
-            rule_set_name = validator.load_rule_set_from_file(config)
-            console.print(f"[green]✅ Loaded rule set: {rule_set_name}[/green]\n")
-        else:
-            # Try to find rule sets in current directory
-            from pathlib import Path
-            rule_files = list(Path('.').glob('*rules*.yaml')) + list(Path('.').glob('*validation*.yaml'))
-            
-            if rule_files:
-                console.print(f"[blue]📋 Found rule configuration files:[/blue]")
-                for file in rule_files:
-                    try:
-                        rule_set_name = validator.load_rule_set_from_file(file)
-                        console.print(f"  [green]✅ {file} -> {rule_set_name}[/green]")
-                    except Exception as e:
-                        console.print(f"  [red]❌ {file} -> Error: {e}[/red]")
-                console.print()
-            else:
-                console.print("[yellow]No rule configuration files found. Use --config to specify a file or --generate for auto-rules.[/yellow]")
+            console.print(f"[blue]📋 Loading validation rules from: {config}[/blue]")
+            try:
+                validator.load_validation_rules(config)
+                rule_sets = list(validator.rule_sets.keys())
+                console.print(f"[green]✅ Loaded {len(rule_sets)} rule set(s): {', '.join(rule_sets)}[/green]\n")
+            except Exception as e:
+                console.print(f"[red]❌ Error loading configuration: {e}[/red]")
                 return
+        else:
+            # No config provided, use basic validation rules for the table
+            console.print("[yellow]📋 No configuration file provided, using basic validation rules[/yellow]")
+            from sqltest.modules.field_validator.models import ValidationRuleSet
+            from sqltest.modules.field_validator import NOT_NULL_RULE
+            
+            basic_rules = ValidationRuleSet(
+                name="basic_validation",
+                description="Basic data quality validation",
+                rules=[NOT_NULL_RULE]
+            )
+            validator.add_rule_set(basic_rules)
+            rule_sets = ["basic_validation"]
+            console.print(f"[green]✅ Using basic validation rules[/green]\n")
         
-        # Get available rule sets
-        available_rule_sets = validator.list_rule_sets()
-        
-        if not available_rule_sets:
-            console.print("[red]No rule sets loaded. Please provide a valid configuration file.[/red]")
-            return
-        
-        # Determine which rule set to run
+        # Determine which rule set to use
         if rule_set:
-            if rule_set not in available_rule_sets:
-                console.print(f"[red]Rule set '{rule_set}' not found. Available: {', '.join(available_rule_sets)}[/red]")
+            if rule_set not in validator.rule_sets:
+                console.print(f"[red]Rule set '{rule_set}' not found. Available: {', '.join(validator.rule_sets.keys())}[/red]")
                 return
             target_rule_sets = [rule_set]
         else:
-            target_rule_sets = available_rule_sets
+            target_rule_sets = list(validator.rule_sets.keys())
         
-        # Parse tags filter
-        tags_set = None
-        if tags:
-            tags_set = {tag.strip() for tag in tags.split(',')}
-            console.print(f"[blue]🏷️  Filtering rules by tags: {', '.join(tags_set)}[/blue]\n")
+        # Validate that we have a table to work with
+        if not table:
+            console.print("[red]Error: --table must be specified for validation[/red]")
+            return
         
-        # Run validation for each rule set
-        all_summaries = []
+        # Parse columns filter
+        column_list = None
+        if columns:
+            column_list = [col.strip() for col in columns.split(',')]
+            console.print(f"[blue]📋 Validating specific columns: {', '.join(column_list)}[/blue]\n")
+        
+        # Run validation
+        all_results = []
         
         with Progress(
             SpinnerColumn(),
@@ -403,94 +409,62 @@ def validate(ctx: click.Context, config: str, rule_set: str, database: str, tabl
             BarColumn(),
             TaskProgressColumn(),
             console=console,
-            transient=True
+            transient=False
         ) as progress:
             
-            for rs_name in target_rule_sets:
-                task = progress.add_task(f"[green]Validating with {rs_name}...", total=100)
+            for rule_set_name in target_rule_sets:
+                task = progress.add_task(f"[green]Validating with {rule_set_name}...", total=100)
                 
                 try:
-                    # Run validation
-                    summary = validator.validate_with_rule_set(
-                        rule_set_name=rs_name,
+                    # Run field validation
+                    result = validator.validate_table_data(
+                        table_name=table,
+                        rule_set_name=rule_set_name,
                         database_name=db_name,
-                        schema_name=schema,
-                        parallel=parallel,
-                        fail_fast=fail_fast,
-                        tags=tags_set
+                        sample_rows=sample_size
                     )
                     
-                    all_summaries.append(summary)
+                    all_results.append(result)
                     progress.update(task, completed=100)
                     
                 except Exception as e:
                     progress.update(task, completed=100)
-                    console.print(f"[red]❌ Validation failed for {rs_name}: {e}[/red]")
+                    console.print(f"[red]❌ Validation failed for {rule_set_name}: {e}[/red]")
                     if fail_fast:
-                        break
+                        return
         
+        # Display results
         console.print("\n" + "="*80)
-        console.print("[bold blue]VALIDATION RESULTS[/bold blue]")
+        console.print("[bold blue]🔍 FIELD VALIDATION RESULTS[/bold blue]")
         console.print("="*80)
         
-        # Show results for each rule set
-        for summary in all_summaries:
-            show_validation_summary(summary)
+        for result in all_results:
+            show_field_validation_result(result, verbose=ctx.obj.get('verbose', False))
             console.print("\n" + "-"*60 + "\n")
         
-        # Show aggregate statistics if multiple rule sets
-        if len(all_summaries) > 1:
-            stats = validator.get_validation_statistics(all_summaries)
-            show_validation_statistics(stats)
+        # Show aggregate summary
+        if len(all_results) > 1:
+            show_field_validation_summary(all_results)
         
         # Export results if requested
         if output:
-            if len(all_summaries) == 1:
-                validator.export_results_to_json(all_summaries[0], output)
-            else:
-                # Export aggregate results
-                import json
-                from pathlib import Path
-                aggregate_data = {
-                    "validation_count": len(all_summaries),
-                    "statistics": stats if len(all_summaries) > 1 else {},
-                    "summaries": []
-                }
-                
-                for summary in all_summaries:
-                    # Convert summary to dict format (simplified)
-                    summary_data = {
-                        "rule_set_name": summary.rule_set_name,
-                        "execution_time_ms": summary.execution_time_ms,
-                        "total_rules": summary.total_rules,
-                        "rules_passed": summary.rules_passed,
-                        "rules_failed": summary.rules_failed,
-                        "success_rate": summary.success_rate,
-                        "total_violations": summary.total_violations,
-                        "has_critical_issues": summary.has_critical_issues
-                    }
-                    aggregate_data["summaries"].append(summary_data)
-                
-                output_path = Path(output)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                with open(output_path, 'w') as f:
-                    json.dump(aggregate_data, f, indent=2, default=str)
-            
+            export_field_validation_results(all_results, output)
             console.print(f"[green]📄 Results exported to: {output}[/green]")
         
-        # Exit with error code if there were critical issues
-        has_critical_issues = any(s.has_critical_issues for s in all_summaries)
-        if has_critical_issues:
-            console.print("\n[red]❌ Validation completed with critical issues[/red]")
-            sys.exit(1)
-        elif any(s.has_errors for s in all_summaries):
-            console.print("\n[yellow]⚠️  Validation completed with errors[/yellow]")
+        # Exit with appropriate code based on validation results
+        has_errors = any(result.has_errors for result in all_results)
+        if has_errors:
+            console.print(f"\n[red]❌ Validation completed with errors[/red]")
+            if fail_fast:
+                sys.exit(1)
         else:
-            console.print("\n[green]✅ All validations passed successfully[/green]")
+            console.print(f"\n[green]✅ All validations passed[/green]")
         
     except ConfigurationError as e:
         console.print(f"[red]Configuration Error: {e}[/red]")
+        sys.exit(1)
+    except DatabaseError as e:
+        console.print(f"[red]Database Error: {e}[/red]")
         sys.exit(1)
     except Exception as e:
         if ctx.obj.get('verbose'):
@@ -3182,6 +3156,215 @@ def show_project_summary(project_path: Path, template: str, include_validation: 
 # Import yaml at the top of the file - add this near other imports
 import yaml
 from datetime import datetime
+
+
+# Field validation display functions
+def show_field_validation_result(result, verbose: bool = False) -> None:
+    """Display field validation result in a formatted way."""
+    from sqltest.modules.field_validator import ValidationLevel
+    
+    console.print(f"[bold blue]📋 Table: {result.table_name}[/bold blue]")
+    console.print(f"Database: [cyan]{result.database_name}[/cyan]")
+    console.print(f"Validation Time: [yellow]{result.validation_timestamp.strftime('%Y-%m-%d %H:%M:%S')}[/yellow]")
+    console.print()
+    
+    # Overall summary
+    summary_table = Table(show_header=True, header_style="bold magenta")
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", style="white", justify="right")
+    
+    summary_table.add_row("Fields Validated", str(len(result.field_results)))
+    summary_table.add_row("Total Rules", str(result.total_rules))
+    summary_table.add_row("✅ Passed", str(result.passed_rules))
+    summary_table.add_row("❌ Failed", str(result.failed_rules))
+    summary_table.add_row("⚠️  Warnings", str(result.warnings))
+    summary_table.add_row("Success Rate", f"{result.overall_success_rate:.1f}%")
+    
+    console.print(summary_table)
+    console.print()
+    
+    # Field-level results
+    if result.field_results:
+        console.print("[bold cyan]📝 Field Validation Details[/bold cyan]")
+        
+        field_table = Table(show_header=True, header_style="bold magenta")
+        field_table.add_column("Field", style="cyan", max_width=20)
+        field_table.add_column("Rows", style="white", justify="right", width=8)
+        field_table.add_column("Rules", style="green", justify="right", width=6)
+        field_table.add_column("✅ Pass", style="green", justify="right", width=6)
+        field_table.add_column("❌ Fail", style="red", justify="right", width=6)
+        field_table.add_column("⚠️  Warn", style="yellow", justify="right", width=6)
+        field_table.add_column("Rate", style="blue", justify="right", width=8)
+        field_table.add_column("Status", style="white", width=8)
+        
+        for field_result in result.field_results:
+            # Status display
+            if field_result.has_errors:
+                status_display = "[red]ERROR[/red]"
+            elif field_result.has_warnings:
+                status_display = "[yellow]WARN[/yellow]"
+            else:
+                status_display = "[green]PASS[/green]"
+            
+            field_table.add_row(
+                field_result.column_name,
+                f"{field_result.total_rows:,}",
+                str(len(field_result.validation_results)),
+                str(field_result.passed_rules),
+                str(field_result.failed_rules),
+                str(field_result.warnings),
+                f"{field_result.success_rate:.1f}%",
+                status_display
+            )
+        
+        console.print(field_table)
+    
+    # Show detailed errors if any failures or verbose mode
+    failed_fields = [fr for fr in result.field_results if fr.has_errors or fr.has_warnings]
+    if failed_fields and (verbose or result.has_errors):
+        console.print("\n[bold red]🔍 Validation Issues[/bold red]")
+        
+        for field_result in failed_fields[:5]:  # Show first 5 fields with issues
+            console.print(f"\n[yellow]Field: {field_result.column_name}[/yellow]")
+            
+            error_results = [vr for vr in field_result.validation_results 
+                           if not vr.passed and vr.level in [ValidationLevel.ERROR, ValidationLevel.WARNING]]
+            
+            for validation_result in error_results[:3]:  # Show first 3 issues per field
+                level_icon = "🔴" if validation_result.level == ValidationLevel.ERROR else "🟡"
+                console.print(f"  {level_icon} [dim]Rule:[/dim] {validation_result.rule_name}")
+                console.print(f"    [red]{validation_result.message}[/red]")
+                if validation_result.value is not None:
+                    value_str = str(validation_result.value)[:50] + "..." if len(str(validation_result.value)) > 50 else str(validation_result.value)
+                    console.print(f"    [dim]Value:[/dim] {value_str}")
+                if validation_result.row_number:
+                    console.print(f"    [dim]Row:[/dim] {validation_result.row_number}")
+            
+            if len(error_results) > 3:
+                console.print(f"    [dim]... and {len(error_results) - 3} more issues[/dim]")
+        
+        if len(failed_fields) > 5:
+            console.print(f"\n[dim]... and {len(failed_fields) - 5} more fields with issues[/dim]")
+
+
+def show_field_validation_summary(results: list) -> None:
+    """Display aggregate field validation summary."""
+    console.print("[bold blue]📊 Aggregate Field Validation Summary[/bold blue]")
+    
+    total_tables = len(results)
+    total_fields = sum(len(result.field_results) for result in results)
+    total_rules = sum(result.total_rules for result in results)
+    total_passed = sum(result.passed_rules for result in results)
+    total_failed = sum(result.failed_rules for result in results)
+    total_warnings = sum(result.warnings for result in results)
+    
+    tables_with_errors = sum(1 for result in results if result.has_errors)
+    tables_with_warnings = sum(1 for result in results if result.has_warnings)
+    
+    # Aggregate statistics
+    agg_table = Table(show_header=True, header_style="bold magenta")
+    agg_table.add_column("Metric", style="cyan")
+    agg_table.add_column("Count", style="white", justify="right")
+    agg_table.add_column("Percentage", style="green", justify="right")
+    
+    agg_table.add_row("Tables Validated", str(total_tables), "100%")
+    agg_table.add_row("Total Fields", str(total_fields), "")
+    agg_table.add_row("Total Rules", str(total_rules), "100%")
+    agg_table.add_row("✅ Passed Rules", str(total_passed), f"{(total_passed/total_rules*100) if total_rules > 0 else 0:.1f}%")
+    agg_table.add_row("❌ Failed Rules", str(total_failed), f"{(total_failed/total_rules*100) if total_rules > 0 else 0:.1f}%")
+    agg_table.add_row("⚠️  Warning Rules", str(total_warnings), f"{(total_warnings/total_rules*100) if total_rules > 0 else 0:.1f}%")
+    agg_table.add_row("🔴 Tables with Errors", str(tables_with_errors), f"{(tables_with_errors/total_tables*100) if total_tables > 0 else 0:.1f}%")
+    agg_table.add_row("🟡 Tables with Warnings", str(tables_with_warnings), f"{(tables_with_warnings/total_tables*100) if total_tables > 0 else 0:.1f}%")
+    agg_table.add_row("✅ Clean Tables", str(total_tables - tables_with_errors - tables_with_warnings), f"{((total_tables - tables_with_errors - tables_with_warnings)/total_tables*100) if total_tables > 0 else 0:.1f}%")
+    
+    console.print(agg_table)
+    
+    # Overall assessment
+    if tables_with_errors > 0:
+        console.print(f"\n[red]❌ {tables_with_errors} table(s) have validation errors[/red]")
+    if tables_with_warnings > 0:
+        console.print(f"\n[yellow]⚠️  {tables_with_warnings} table(s) have validation warnings[/yellow]")
+    if tables_with_errors == 0 and tables_with_warnings == 0:
+        console.print(f"\n[green]✅ All tables passed field validation[/green]")
+
+
+def export_field_validation_results(results: list, output_path: str) -> None:
+    """Export field validation results to JSON file."""
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    
+    # Prepare export data
+    export_data = {
+        "export_info": {
+            "timestamp": datetime.now().isoformat(),
+            "sqltest_version": __version__,
+            "validation_count": len(results)
+        },
+        "summary": {
+            "total_tables": len(results),
+            "total_fields": sum(len(result.field_results) for result in results),
+            "total_rules": sum(result.total_rules for result in results),
+            "passed_rules": sum(result.passed_rules for result in results),
+            "failed_rules": sum(result.failed_rules for result in results),
+            "warnings": sum(result.warnings for result in results),
+            "tables_with_errors": sum(1 for result in results if result.has_errors),
+            "tables_with_warnings": sum(1 for result in results if result.has_warnings),
+            "overall_success_rate": (sum(result.passed_rules for result in results) / sum(result.total_rules for result in results) * 100) if sum(result.total_rules for result in results) > 0 else 0
+        },
+        "validation_results": []
+    }
+    
+    # Convert validation results to serializable format
+    for result in results:
+        table_data = {
+            "table_name": result.table_name,
+            "database_name": result.database_name,
+            "validation_timestamp": result.validation_timestamp.isoformat(),
+            "total_rules": result.total_rules,
+            "passed_rules": result.passed_rules,
+            "failed_rules": result.failed_rules,
+            "warnings": result.warnings,
+            "overall_success_rate": result.overall_success_rate,
+            "has_errors": result.has_errors,
+            "has_warnings": result.has_warnings,
+            "field_results": []
+        }
+        
+        # Add field-level results
+        for field_result in result.field_results:
+            field_data = {
+                "column_name": field_result.column_name,
+                "total_rows": field_result.total_rows,
+                "passed_rules": field_result.passed_rules,
+                "failed_rules": field_result.failed_rules,
+                "warnings": field_result.warnings,
+                "success_rate": field_result.success_rate,
+                "has_errors": field_result.has_errors,
+                "has_warnings": field_result.has_warnings,
+                "validation_results": [
+                    {
+                        "rule_name": vr.rule_name,
+                        "passed": vr.passed,
+                        "level": vr.level.value,
+                        "message": vr.message,
+                        "value": str(vr.value) if vr.value is not None else None,
+                        "row_number": vr.row_number,
+                        "validation_timestamp": vr.validation_timestamp.isoformat()
+                    }
+                    for vr in field_result.validation_results
+                ]
+            }
+            table_data["field_results"].append(field_data)
+        
+        export_data["validation_results"].append(table_data)
+    
+    # Write to file
+    output_path_obj = Path(output_path)
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path_obj, 'w') as f:
+        json.dump(export_data, f, indent=2, default=str)
 
 
 if __name__ == "__main__":

@@ -120,7 +120,7 @@ class TableFieldValidator:
         
         # Execute query and get data
         try:
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty:
                 raise ValidationError(f"No data found in table '{table_name}'")
@@ -182,7 +182,7 @@ class TableFieldValidator:
         
         # Execute query
         try:
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty:
                 raise ValidationError("Query returned no results to validate")
@@ -248,7 +248,7 @@ class TableFieldValidator:
         
         # Execute query and validate
         try:
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty or column_name not in result.data.columns:
                 raise ValidationError(f"Column '{column_name}' not found in table '{table_name}'")

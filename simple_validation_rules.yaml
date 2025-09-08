@@ -1,0 +1,25 @@
+validation_rules:
+  simple_user_validation:
+    description: Simple validation rules for test users table
+    apply_to_columns:
+    - email
+    - age
+    rules:
+    - description: Validate email format
+      error_message: Invalid email format
+      level: error
+      name: email_format
+      pattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+      type: regex
+    - allow_null: false
+      description: Email field cannot be null
+      level: error
+      name: email_not_null
+      type: null_check
+    - description: Age must be reasonable (0 to 120)
+      inclusive: true
+      level: error
+      max_value: 120
+      min_value: 0
+      name: age_range
+      type: range

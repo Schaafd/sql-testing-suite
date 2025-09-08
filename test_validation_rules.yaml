@@ -1,0 +1,44 @@
+validation_rules:
+  product_validation:
+    description: Validation rules for product data
+    rules:
+    - description: Product name length validation
+      level: warning
+      max_length: 100
+      min_length: 3
+      name: product_name_length
+      type: length
+    - allowed_values:
+      - active
+      - inactive
+      - pending
+      case_sensitive: false
+      description: Product status validation
+      level: error
+      name: status_enum
+      type: enum
+  user_validation:
+    apply_to_columns:
+    - email
+    - phone
+    - age
+    description: Validation rules for user data
+    rules:
+    - description: Validate email format
+      error_message: Invalid email format
+      level: error
+      name: email_format
+      pattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+      type: regex
+    - allow_null: false
+      description: Field cannot be null
+      level: error
+      name: not_null
+      type: null_check
+    - description: Age must be between 0 and 150
+      inclusive: true
+      level: error
+      max_value: 150
+      min_value: 0
+      name: age_range
+      type: range
