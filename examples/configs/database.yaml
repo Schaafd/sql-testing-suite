@@ -40,7 +40,7 @@ databases:
   # Local SQLite for quick testing
   local_sqlite:
     type: sqlite
-    path: ./test_data.db
+    path: ./data/test_data.db
     
   # MySQL example
   mysql_db:

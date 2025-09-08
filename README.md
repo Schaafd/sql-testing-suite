@@ -140,8 +140,8 @@ This project is currently in the planning phase. The implementation will be done
 
 ## 📚 Documentation
 
-- [Project Plan](PROJECT_PLAN.md) - Detailed implementation plan and architecture
-- [CLI Mockup](CLI_MOCKUP.md) - Visual mockups of the command-line interface
+- [Project Plan](docs/PROJECT_PLAN.md) - Detailed implementation plan and architecture
+- [CLI Mockup](docs/CLI_MOCKUP.md) - Visual mockups of the command-line interface
 - [Example Configurations](examples/configs/) - Sample YAML configuration files
 
 ## 🤝 Contributing
@@ -163,4 +163,4 @@ MIT License (to be added)
 
 ---
 
-**Note**: This project is currently in the planning and design phase. Implementation will begin soon based on the detailed [PROJECT_PLAN.md](PROJECT_PLAN.md).
+**Note**: This project is currently in the planning and design phase. Implementation will begin soon based on the detailed [PROJECT_PLAN.md](docs/PROJECT_PLAN.md).

@@ -5,7 +5,7 @@ databases:
   # Demo SQLite database  
   local_sqlite:
     type: sqlite
-    path: ./test_data.db
+    path: ./data/test_data.db
     options:
       timeout: 30
       check_same_thread: false

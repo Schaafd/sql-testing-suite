@@ -42,14 +42,14 @@ fi
 print_info "Setting up demo database..."
 
 # Remove existing database if it exists
-if [ -f "./test_data.db" ]; then
-    rm "./test_data.db"
+if [ -f "./data/test_data.db" ]; then
+    rm "./data/test_data.db"
     print_info "Removed existing demo database"
 fi
 
 # Create the demo database using sqlite3
-sqlite3 "./test_data.db" < "./examples/demo/data.sql"
-print_success "Demo database created at ./test_data.db"
+sqlite3 "./data/test_data.db" < "./examples/demo/data.sql"
+print_success "Demo database created at ./data/test_data.db"
 
 print_step "Demo 1: Database Discovery"
 
@@ -81,7 +81,7 @@ uv run sqltest --config examples/demo/database.yaml validate --config examples/d
 print_step "Demo Complete!"
 
 print_success "All demo commands completed successfully"
-print_info "Demo database is available at ./test_data.db"
+print_info "Demo database is available at ./data/test_data.db"
 print_info "You can run individual commands from the README or explore the CLI with:"
 print_info "  uv run sqltest --help"
 print_info "  uv run sqltest --config examples/demo/database.yaml db --help"

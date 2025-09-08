@@ -30,7 +30,7 @@ uv run sqltest validate --config examples/demo/validation_rules.yaml --table use
 
 What the demo creates
 
-- SQLite DB at ./test_data.db (referenced by examples/configs/database.yaml as local_sqlite)
+- SQLite DB at ./data/test_data.db (referenced by examples/configs/database.yaml as local_sqlite)
 - users table with some intentionally invalid data to show validation
 - orders table
 - user_orders view (join of users and orders)

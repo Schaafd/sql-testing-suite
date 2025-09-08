@@ -173,8 +173,9 @@ Thumbs.db
 # SQLTest Pro specific
 config/local_*.yaml
 config/secrets.yaml
-reports/
-test_data.db
+# Generated reports and data
+reports/*.json
+data/test_data.db
 *.log
 .sqltest/
 temp_schema_*
