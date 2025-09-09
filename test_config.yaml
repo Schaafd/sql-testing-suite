@@ -1,0 +1,14 @@
+databases:
+  demo_db:
+    type: sqlite
+    path: demo_test.db
+
+default_database: demo_db
+
+validation_settings:
+  fail_fast: false
+  parallel_execution: true
+  max_workers: 4
+  report_format: html
+  output_dir: "./validation_reports"
+  timeout: 300

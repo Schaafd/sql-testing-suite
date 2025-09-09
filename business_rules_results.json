@@ -1,0 +1,260 @@
+{
+  "export_info": {
+    "timestamp": "2025-09-08T23:29:54.133846",
+    "sqltest_version": "0.1.0",
+    "validation_count": 1
+  },
+  "summary": {
+    "total_rule_sets": 1,
+    "total_rules": 6,
+    "total_passed": 4,
+    "total_failed": 2,
+    "total_errors": 0,
+    "total_violations": 5,
+    "critical_violations": 2,
+    "error_violations": 3,
+    "warning_violations": 0,
+    "info_violations": 0,
+    "overall_success_rate": 66.66666666666666
+  },
+  "validation_results": [
+    {
+      "validation_name": "ecommerce_data_quality_rules_filtered_validation",
+      "rule_set_name": "ecommerce_data_quality_rules_filtered",
+      "validation_context": {
+        "database_name": "demo_db",
+        "schema_name": null,
+        "table_name": null,
+        "query": null,
+        "parameters": {},
+        "metadata": {
+          "rule_set_name": "ecommerce_data_quality_rules"
+        },
+        "validation_timestamp": "2025-09-08T23:29:54.117969"
+      },
+      "execution_summary": {
+        "start_time": "2025-09-08T23:29:54.117975",
+        "end_time": "2025-09-08T23:29:54.128639",
+        "execution_time_ms": 10.664,
+        "total_rules": 6,
+        "rules_executed": 6,
+        "rules_passed": 4,
+        "rules_failed": 2,
+        "rules_error": 0,
+        "rules_skipped": 0,
+        "success_rate": 66.66666666666666,
+        "has_critical_issues": true,
+        "has_errors": true
+      },
+      "violation_summary": {
+        "total_violations": 5,
+        "critical_violations": 2,
+        "error_violations": 3,
+        "warning_violations": 0,
+        "info_violations": 0
+      },
+      "rule_results": [
+        {
+          "rule_name": "positive_order_amounts",
+          "rule_type": "business_logic",
+          "status": "failed",
+          "severity": "error",
+          "scope": "table",
+          "passed": false,
+          "message": "Rule failed with 3 violations",
+          "execution_time_ms": 7.956981658935547,
+          "rows_evaluated": 2,
+          "timestamp": "2025-09-08T23:29:54.126074",
+          "context": {
+            "query_execution_time_ms": 7.694005966186523,
+            "result_rows": 2
+          },
+          "violations": [
+            {
+              "violation_id": "ee0865b7-d192-4462-8285-a75e501c9cce",
+              "severity": "error",
+              "message": "Order amount must be positive",
+              "table_name": "orders",
+              "column_name": "total_amount",
+              "row_identifier": null,
+              "violation_count": 1,
+              "sample_values": [
+                3,
+                -50
+              ],
+              "context": {
+                "order_id": 3,
+                "total_amount": -50,
+                "message": "Order amount must be positive",
+                "violation_count": 1,
+                "table_name": "orders",
+                "column_name": "total_amount"
+              },
+              "timestamp": "2025-09-08T23:29:54.125995"
+            },
+            {
+              "violation_id": "0f0b20f9-5194-409e-8f7b-8d9ec1e75f6e",
+              "severity": "error",
+              "message": "Order amount must be positive",
+              "table_name": "orders",
+              "column_name": "total_amount",
+              "row_identifier": null,
+              "violation_count": 1,
+              "sample_values": [
+                5,
+                0
+              ],
+              "context": {
+                "order_id": 5,
+                "total_amount": 0,
+                "message": "Order amount must be positive",
+                "violation_count": 1,
+                "table_name": "orders",
+                "column_name": "total_amount"
+              },
+              "timestamp": "2025-09-08T23:29:54.126053"
+            },
+            {
+              "violation_id": "6071c0bb-2712-4c43-9641-32ed6ab7e8e9",
+              "severity": "error",
+              "message": "Violations exceed maximum allowed (2 > 0)",
+              "table_name": null,
+              "column_name": null,
+              "row_identifier": null,
+              "violation_count": 1,
+              "sample_values": [],
+              "context": {
+                "max_allowed": 0,
+                "actual": 2
+              },
+              "timestamp": "2025-09-08T23:29:54.126068"
+            }
+          ]
+        },
+        {
+          "rule_name": "order_customer_reference",
+          "rule_type": "referential_integrity",
+          "status": "failed",
+          "severity": "critical",
+          "scope": "cross_database",
+          "passed": false,
+          "message": "Rule failed with 2 violations",
+          "execution_time_ms": 8.84699821472168,
+          "rows_evaluated": 1,
+          "timestamp": "2025-09-08T23:29:54.126879",
+          "context": {
+            "query_execution_time_ms": 8.68082046508789,
+            "result_rows": 1
+          },
+          "violations": [
+            {
+              "violation_id": "d46e932c-a386-40a8-825f-245ed31bca9e",
+              "severity": "critical",
+              "message": "Order references non-existent customer",
+              "table_name": "orders",
+              "column_name": "customer_id",
+              "row_identifier": null,
+              "violation_count": 1,
+              "sample_values": [
+                4,
+                999
+              ],
+              "context": {
+                "order_id": 4,
+                "customer_id": 999,
+                "message": "Order references non-existent customer",
+                "violation_count": 1,
+                "table_name": "orders",
+                "column_name": "customer_id"
+              },
+              "timestamp": "2025-09-08T23:29:54.126857"
+            },
+            {
+              "violation_id": "e23a7584-e307-4540-9b5c-9de8f24bf9aa",
+              "severity": "critical",
+              "message": "Violations exceed maximum allowed (1 > 0)",
+              "table_name": null,
+              "column_name": null,
+              "row_identifier": null,
+              "violation_count": 1,
+              "sample_values": [],
+              "context": {
+                "max_allowed": 0,
+                "actual": 1
+              },
+              "timestamp": "2025-09-08T23:29:54.126874"
+            }
+          ]
+        },
+        {
+          "rule_name": "order_date_validation",
+          "rule_type": "business_logic",
+          "status": "passed",
+          "severity": "error",
+          "scope": "table",
+          "passed": true,
+          "message": "Rule executed successfully",
+          "execution_time_ms": 8.712053298950195,
+          "rows_evaluated": 0,
+          "timestamp": "2025-09-08T23:29:54.127347",
+          "context": {
+            "query_execution_time_ms": 8.701086044311523,
+            "result_rows": 0
+          },
+          "violations": []
+        },
+        {
+          "rule_name": "reasonable_order_amounts",
+          "rule_type": "business_logic",
+          "status": "passed",
+          "severity": "warning",
+          "scope": "table",
+          "passed": true,
+          "message": "Rule executed successfully",
+          "execution_time_ms": 9.080171585083008,
+          "rows_evaluated": 0,
+          "timestamp": "2025-09-08T23:29:54.127542",
+          "context": {
+            "query_execution_time_ms": 9.071826934814453,
+            "result_rows": 0
+          },
+          "violations": []
+        },
+        {
+          "rule_name": "order_status_consistency",
+          "rule_type": "consistency",
+          "status": "passed",
+          "severity": "warning",
+          "scope": "table",
+          "passed": true,
+          "message": "Rule executed successfully",
+          "execution_time_ms": 0.5078315734863281,
+          "rows_evaluated": 0,
+          "timestamp": "2025-09-08T23:29:54.128101",
+          "context": {
+            "query_execution_time_ms": 0.49805641174316406,
+            "result_rows": 0
+          },
+          "violations": []
+        },
+        {
+          "rule_name": "customer_status_consistency",
+          "rule_type": "consistency",
+          "status": "passed",
+          "severity": "warning",
+          "scope": "cross_database",
+          "passed": true,
+          "message": "Rule executed successfully",
+          "execution_time_ms": 0.6990432739257812,
+          "rows_evaluated": 0,
+          "timestamp": "2025-09-08T23:29:54.128491",
+          "context": {
+            "query_execution_time_ms": 0.6918907165527344,
+            "result_rows": 0
+          },
+          "violations": []
+        }
+      ]
+    }
+  ]
+}
