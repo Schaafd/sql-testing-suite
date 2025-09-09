@@ -1,0 +1,268 @@
+---
+# Sample Business Rules Configuration for SQLTest Pro
+# This file demonstrates various types of business rules and validations
+
+name: "ecommerce_data_quality_rules"
+description: "Comprehensive data quality and business logic rules for an ecommerce database"
+enabled: true
+parallel_execution: true
+max_concurrent_rules: 4
+tags:
+  - "ecommerce"
+  - "data_quality"
+  - "production"
+
+rules:
+  # Data Quality Rules
+  - name: "customer_name_required"
+    description: "Customer names must not be null or empty"
+    rule_type: "data_quality"
+    severity: "error"
+    scope: "table"
+    enabled: true
+    tags:
+      - "data_quality"
+      - "customers"
+      - "required_fields"
+    sql_query: |
+      SELECT 
+        customer_id,
+        customer_name,
+        'Customer name is required' as message,
+        1 as violation_count,
+        'customers' as table_name,
+        'customer_name' as column_name
+      FROM customers 
+      WHERE customer_name IS NULL 
+         OR TRIM(customer_name) = ''
+    timeout_seconds: 30
+    max_violation_count: 0  # No violations expected
+
+  - name: "email_format_validation"
+    description: "Customer emails must follow valid email format"
+    rule_type: "data_quality"
+    severity: "error"
+    scope: "column"
+    enabled: true
+    tags:
+      - "data_quality"
+      - "customers"
+      - "format_validation"
+    sql_query: |
+      SELECT 
+        customer_id,
+        email,
+        'Invalid email format' as message,
+        1 as violation_count,
+        'customers' as table_name,
+        'email' as column_name
+      FROM customers 
+      WHERE email IS NOT NULL
+        AND email NOT LIKE '%_@_%.__%'
+    timeout_seconds: 30
+
+  - name: "phone_format_validation"
+    description: "Phone numbers should follow standard format when provided"
+    rule_type: "data_quality"
+    severity: "warning"
+    scope: "column"
+    enabled: true
+    tags:
+      - "data_quality"
+      - "customers"
+      - "format_validation"
+    sql_query: |
+      SELECT 
+        customer_id,
+        phone,
+        'Phone number format should be standardized' as message,
+        1 as violation_count,
+        'customers' as table_name,
+        'phone' as column_name
+      FROM customers 
+      WHERE phone IS NOT NULL
+        AND phone NOT REGEXP '^[0-9]{3}-[0-9]{4}$'
+        AND phone NOT REGEXP '^\([0-9]{3}\) [0-9]{3}-[0-9]{4}$'
+    timeout_seconds: 30
+
+  # Referential Integrity Rules
+  - name: "order_customer_reference"
+    description: "All orders must reference valid customers"
+    rule_type: "referential_integrity"
+    severity: "critical"
+    scope: "cross_database"
+    enabled: true
+    tags:
+      - "referential_integrity"
+      - "orders"
+      - "customers"
+    sql_query: |
+      SELECT 
+        o.order_id,
+        o.customer_id,
+        'Order references non-existent customer' as message,
+        1 as violation_count,
+        'orders' as table_name,
+        'customer_id' as column_name
+      FROM orders o
+      LEFT JOIN customers c ON o.customer_id = c.customer_id
+      WHERE c.customer_id IS NULL
+    timeout_seconds: 60
+    max_violation_count: 0  # Critical - no violations allowed
+
+  # Business Logic Rules
+  - name: "positive_order_amounts"
+    description: "Order amounts must be positive values"
+    rule_type: "business_logic"
+    severity: "error"
+    scope: "table"
+    enabled: true
+    tags:
+      - "business_logic"
+      - "orders"
+      - "financial_validation"
+    sql_query: |
+      SELECT 
+        order_id,
+        total_amount,
+        'Order amount must be positive' as message,
+        1 as violation_count,
+        'orders' as table_name,
+        'total_amount' as column_name
+      FROM orders 
+      WHERE total_amount <= 0
+    timeout_seconds: 30
+    max_violation_count: 0
+
+  - name: "reasonable_order_amounts"
+    description: "Order amounts should be within reasonable business limits"
+    rule_type: "business_logic"
+    severity: "warning"
+    scope: "table"
+    enabled: true
+    tags:
+      - "business_logic"
+      - "orders"
+      - "outlier_detection"
+    sql_query: |
+      SELECT 
+        order_id,
+        total_amount,
+        'Unusually high order amount - please review' as message,
+        1 as violation_count,
+        'orders' as table_name,
+        'total_amount' as column_name
+      FROM orders 
+      WHERE total_amount > 10000.00
+    timeout_seconds: 30
+    max_violation_count: 10  # Allow some high-value orders
+
+  - name: "order_date_validation"
+    description: "Order dates must be within reasonable timeframe"
+    rule_type: "business_logic"
+    severity: "error"
+    scope: "table"
+    enabled: true
+    tags:
+      - "business_logic"
+      - "orders"
+      - "date_validation"
+    sql_query: |
+      SELECT 
+        order_id,
+        order_date,
+        'Order date is in future or too far in past' as message,
+        1 as violation_count,
+        'orders' as table_name,
+        'order_date' as column_name
+      FROM orders 
+      WHERE order_date > DATE('now')
+         OR order_date < DATE('now', '-5 years')
+    timeout_seconds: 30
+
+  # Completeness Rules
+  - name: "customer_profile_completeness"
+    description: "Customer profiles should have complete information"
+    rule_type: "completeness"
+    severity: "info"
+    scope: "table"
+    enabled: true
+    tags:
+      - "completeness"
+      - "customers"
+      - "data_quality"
+    sql_query: |
+      SELECT 
+        customer_id,
+        customer_name,
+        CASE 
+          WHEN phone IS NULL AND registration_date IS NULL THEN 'Missing phone and registration date'
+          WHEN phone IS NULL THEN 'Missing phone number'
+          WHEN registration_date IS NULL THEN 'Missing registration date'
+        END as message,
+        1 as violation_count,
+        'customers' as table_name,
+        CASE 
+          WHEN phone IS NULL THEN 'phone'
+          WHEN registration_date IS NULL THEN 'registration_date'
+          ELSE 'multiple'
+        END as column_name
+      FROM customers 
+      WHERE phone IS NULL OR registration_date IS NULL
+    timeout_seconds: 30
+    max_violation_count: 50  # Allow some incomplete profiles
+
+  # Consistency Rules
+  - name: "order_status_consistency"
+    description: "Order status should be consistent with business rules"
+    rule_type: "consistency"
+    severity: "warning"
+    scope: "table"
+    enabled: true
+    tags:
+      - "consistency"
+      - "orders"
+      - "business_logic"
+    sql_query: |
+      SELECT 
+        order_id,
+        status,
+        total_amount,
+        'Completed orders with zero amount may indicate data inconsistency' as message,
+        1 as violation_count,
+        'orders' as table_name,
+        'status' as column_name
+      FROM orders 
+      WHERE status = 'completed' 
+        AND total_amount = 0
+    timeout_seconds: 30
+
+  - name: "customer_status_consistency"
+    description: "Inactive customers should not have recent orders"
+    rule_type: "consistency"
+    severity: "warning"
+    scope: "cross_database"
+    enabled: true
+    tags:
+      - "consistency"
+      - "customers"
+      - "orders"
+      - "business_logic"
+    dependencies:
+      - "order_customer_reference"  # Ensure referential integrity first
+    sql_query: |
+      SELECT 
+        c.customer_id,
+        c.status as customer_status,
+        COUNT(o.order_id) as recent_orders,
+        'Inactive customer has recent orders' as message,
+        COUNT(o.order_id) as violation_count,
+        'customers' as table_name,
+        'status' as column_name
+      FROM customers c
+      JOIN orders o ON c.customer_id = o.customer_id
+      WHERE c.status = 'inactive'
+        AND o.order_date >= DATE('now', '-30 days')
+      GROUP BY c.customer_id, c.status
+      HAVING COUNT(o.order_id) > 0
+    timeout_seconds: 60
