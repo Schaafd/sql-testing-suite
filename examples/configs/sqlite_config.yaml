@@ -1,0 +1,25 @@
+# SQLTest Pro - SQLite Database Configuration
+# Simple configuration for testing with SQLite databases
+
+databases:
+  # Local SQLite database created by demo
+  profiler_test:
+    type: sqlite
+    path: ./data/profiler_test_data.db
+    
+  # Original test data
+  test:
+    type: sqlite
+    path: ./data/test_data.db
+
+# Connection pools configuration
+connection_pools:
+  default:
+    min_connections: 1
+    max_connections: 5
+    timeout: 30
+    retry_attempts: 3
+    retry_delay: 1
+
+# Default database for commands if not specified
+default_database: profiler_test

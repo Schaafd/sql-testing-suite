@@ -11,7 +11,7 @@ from .models import (
     ColumnStatistics, TableProfile, QueryProfile, PatternMatch, 
     DataQualityIssue, ComparisonResult
 )
-from ...exceptions import ProfilerError
+from ...exceptions import ProfilingError
 
 
 class DataAnalyzer:
