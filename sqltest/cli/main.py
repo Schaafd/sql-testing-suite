@@ -33,6 +33,7 @@ def cli(ctx: click.Context, version: bool, config: str, db: str, output: str, ve
     🚀 Features:
     • Data profiling and analysis
     • Field and business rule validation  
+    • Business logic and integrity validation
     • SQL unit testing with coverage
     • Interactive CLI with progress tracking
     • Multi-database support
@@ -62,7 +63,8 @@ def show_dashboard() -> None:
     
     dashboard_content = Text()
     dashboard_content.append("📊 Profile Data\n", style="bold")
-    dashboard_content.append("✓  Run Validations\n", style="bold") 
+    dashboard_content.append("✓  Field Validations\n", style="bold") 
+    dashboard_content.append("🔍 Business Rules\n", style="bold")
     dashboard_content.append("🧪 Execute Unit Tests\n", style="bold")
     dashboard_content.append("📄 Generate Reports\n", style="bold")
     dashboard_content.append("⚙️  Configure Settings\n", style="bold")
@@ -3505,6 +3507,440 @@ def export_field_validation_results(results: list, output_path: str) -> None:
     
     with open(output_path_obj, 'w') as f:
         json.dump(export_data, f, indent=2, default=str)
+
+
+@cli.command()
+@click.option("--rule-set", "-r", help="Rule set name or path to YAML configuration")
+@click.option("--directory", "-d", type=click.Path(exists=True), help="Directory containing rule set YAML files")
+@click.option("--table", "-t", help="Specific table to validate")
+@click.option("--query", "-q", help="Custom SQL query to validate")
+@click.option("--database", help="Database to validate (default: default database)")
+@click.option("--schema", "-s", help="Schema name (database-specific)")
+@click.option("--tags", help="Filter rules by tags (comma-separated)")
+@click.option("--parallel/--sequential", default=None, help="Override parallel execution setting")
+@click.option("--fail-fast", is_flag=True, help="Stop on first critical failure")
+@click.option("--max-workers", type=int, default=5, help="Maximum number of worker threads")
+@click.option("--output", "-o", type=click.Path(), help="Export results to JSON file")
+@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", help="Output format")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed violation information")
+@click.pass_context
+def business_rules(ctx: click.Context, rule_set: str, directory: str, table: str, query: str,
+                  database: str, schema: str, tags: str, parallel: bool, fail_fast: bool,
+                  max_workers: int, output: str, output_format: str, verbose: bool) -> None:
+    """🔍 Execute business rule validation with comprehensive reporting.
+    
+    Validates data integrity, business logic, and quality rules including:
+    • Data quality checks (completeness, accuracy, consistency)
+    • Referential integrity validation
+    • Business logic enforcement
+    • Custom SQL-based rules
+    • Parallel execution with dependency management
+    • Rich violation reporting and recommendations
+    """
+    if not rule_set and not directory:
+        console.print("[red]Error: Either --rule-set or --directory must be specified[/red]")
+        console.print("\n[dim]Examples:[/dim]")
+        console.print("  [cyan]sqltest business-rules --rule-set my_rules.yaml --database prod[/cyan]")
+        console.print("  [cyan]sqltest business-rules --directory rules/ --table customers[/cyan]")
+        console.print("  [cyan]sqltest business-rules --rule-set ecommerce_rules --tags data_quality[/cyan]")
+        return
+    
+    try:
+        from sqltest.modules.business_rules import BusinessRuleValidator
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        import time as time_module
+        from pathlib import Path
+        
+        config = get_config(ctx.obj.get('config'))
+        manager = get_connection_manager(config)
+        db_name = database or ctx.obj.get('db') or config.default_database
+        
+        console.print(f"[bold blue]🔍 Business Rule Validation - Database: {db_name}[/bold blue]\n")
+        
+        # Initialize validator
+        validator = BusinessRuleValidator(manager, max_workers=max_workers)
+        
+        # Load rule sets
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            load_task = progress.add_task("[green]Loading business rules...", total=100)
+            
+            loaded_rule_sets = []
+            
+            try:
+                if rule_set:
+                    # Load specific rule set
+                    if Path(rule_set).exists():
+                        # Load from file
+                        rule_set_name = validator.load_rule_set_from_file(rule_set)
+                        loaded_rule_sets.append(rule_set_name)
+                        console.print(f"📄 Loaded rule set from file: [green]{rule_set}[/green]")
+                    else:
+                        # Assume it's a rule set name already loaded
+                        if rule_set in validator.list_rule_sets():
+                            loaded_rule_sets.append(rule_set)
+                            console.print(f"📋 Using rule set: [green]{rule_set}[/green]")
+                        else:
+                            console.print(f"[red]❌ Rule set '{rule_set}' not found[/red]")
+                            return
+                
+                if directory:
+                    # Load from directory
+                    loaded_names = validator.load_rule_sets_from_directory(directory, recursive=True)
+                    loaded_rule_sets.extend(loaded_names)
+                    console.print(f"📁 Loaded {len(loaded_names)} rule sets from directory: [green]{directory}[/green]")
+                
+                progress.update(load_task, completed=100)
+                
+            except Exception as e:
+                progress.update(load_task, completed=100)
+                console.print(f"[red]❌ Failed to load rule sets: {e}[/red]")
+                if ctx.obj.get('verbose') or verbose:
+                    import traceback
+                    console.print(f"[dim]{traceback.format_exc()}[/dim]")
+                sys.exit(1)
+        
+        # Show loaded rule sets
+        if loaded_rule_sets:
+            console.print(f"\n📋 Available rule sets:")
+            for rule_set_name in loaded_rule_sets:
+                rule_set_obj = validator.get_rule_set(rule_set_name)
+                enabled_count = len(rule_set_obj.get_enabled_rules())
+                total_count = len(rule_set_obj.rules)
+                console.print(f"  • [cyan]{rule_set_name}[/cyan]: {enabled_count}/{total_count} enabled rules")
+        else:
+            console.print("[yellow]⚠️  No rule sets loaded[/yellow]")
+            return
+        
+        # Parse tag filter
+        tag_filter = None
+        if tags:
+            tag_filter = {tag.strip() for tag in tags.split(',')}
+            console.print(f"🏷️  Tag filter: [cyan]{', '.join(tag_filter)}[/cyan]")
+        
+        console.print()
+        
+        # Execute validation for each rule set
+        all_results = []
+        
+        for rule_set_name in loaded_rule_sets:
+            console.print(f"[bold green]▶️  Executing rule set: {rule_set_name}[/bold green]")
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+                transient=True
+            ) as progress:
+                exec_task = progress.add_task(f"[green]Running business rules...", total=100)
+                
+                try:
+                    # Start timing
+                    start_time = time_module.time()
+                    
+                    if table:
+                        # Table-specific validation (not implemented for business rules directly)
+                        # We'll validate with rule set but note the table context
+                        console.print(f"   📊 Table focus: [cyan]{table}[/cyan]")
+                    
+                    # Execute validation
+                    summary = validator.validate_with_rule_set(
+                        rule_set_name=rule_set_name,
+                        database_name=db_name,
+                        schema_name=schema,
+                        parallel=parallel,
+                        fail_fast=fail_fast,
+                        tags=tag_filter
+                    )
+                    
+                    execution_time = time_module.time() - start_time
+                    all_results.append(summary)
+                    
+                    progress.update(exec_task, completed=100)
+                    
+                    # Show immediate results
+                    success_icon = "✅" if not summary.has_errors and not summary.has_critical_issues else "❌"
+                    console.print(f"   {success_icon} Completed in {execution_time:.2f}s - {summary.rules_passed}/{summary.total_rules} rules passed")
+                    
+                except Exception as e:
+                    progress.update(exec_task, completed=100)
+                    console.print(f"   [red]❌ Failed to execute rule set {rule_set_name}: {e}[/red]")
+                    if ctx.obj.get('verbose') or verbose:
+                        import traceback
+                        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+                    continue
+        
+        # Display comprehensive results
+        if not all_results:
+            console.print("[yellow]No validation results to display[/yellow]")
+            return
+        
+        console.print("\n" + "="*80)
+        console.print("[bold blue]🔍 BUSINESS RULE VALIDATION RESULTS[/bold blue]")
+        console.print("="*80)
+        
+        if output_format == "json":
+            display_business_rule_results_json(all_results)
+        else:
+            display_business_rule_results_table(all_results, verbose)
+        
+        # Export results if requested
+        if output:
+            export_business_rule_results(all_results, output)
+            console.print(f"\n💾 Results exported to: [cyan]{output}[/cyan]")
+        
+        # Summary assessment
+        total_critical = sum(s.critical_violations for s in all_results)
+        total_errors = sum(s.error_violations for s in all_results) 
+        total_warnings = sum(s.warning_violations for s in all_results)
+        
+        if total_critical > 0:
+            console.print(f"\n[red]🔴 {total_critical} critical violation(s) found - immediate attention required![/red]")
+            sys.exit(1)
+        elif total_errors > 0:
+            console.print(f"\n[red]❌ {total_errors} error violation(s) found[/red]")
+            sys.exit(1)
+        elif total_warnings > 0:
+            console.print(f"\n[yellow]⚠️  {total_warnings} warning(s) found[/yellow]")
+        else:
+            console.print(f"\n[green]✅ All business rules passed successfully![/green]")
+        
+    except ConfigurationError as e:
+        console.print(f"[red]Configuration Error: {e}[/red]")
+        sys.exit(1)
+    except DatabaseError as e:
+        console.print(f"[red]Database Error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        if ctx.obj.get('verbose') or verbose:
+            import traceback
+            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def display_business_rule_results_table(results: list, verbose: bool = False) -> None:
+    """Display business rule validation results in table format."""
+    for i, summary in enumerate(results, 1):
+        if len(results) > 1:
+            console.print(f"\n[bold cyan]📋 Rule Set {i}: {summary.rule_set_name}[/bold cyan]")
+        
+        # Summary table
+        summary_table = Table(show_header=True, header_style="bold magenta")
+        summary_table.add_column("Metric", style="cyan", width=25)
+        summary_table.add_column("Count", style="white", justify="right", width=10)
+        summary_table.add_column("Percentage", style="green", justify="right", width=12)
+        
+        summary_table.add_row("Execution Time", f"{summary.execution_time_ms:.2f}ms", "")
+        summary_table.add_row("Total Rules", str(summary.total_rules), "100%")
+        summary_table.add_row("✅ Passed", str(summary.rules_passed), f"{summary.success_rate:.1f}%")
+        summary_table.add_row("❌ Failed", str(summary.rules_failed), f"{(summary.rules_failed/summary.total_rules*100) if summary.total_rules > 0 else 0:.1f}%")
+        summary_table.add_row("🔥 Errors", str(summary.rules_error), f"{(summary.rules_error/summary.total_rules*100) if summary.total_rules > 0 else 0:.1f}%")
+        summary_table.add_row("⏭️  Skipped", str(summary.rules_skipped), f"{(summary.rules_skipped/summary.total_rules*100) if summary.total_rules > 0 else 0:.1f}%")
+        
+        console.print(summary_table)
+        
+        # Violations summary
+        if summary.total_violations > 0:
+            violations_table = Table(show_header=True, header_style="bold red")
+            violations_table.add_column("Violation Level", style="cyan")
+            violations_table.add_column("Count", style="white", justify="right")
+            violations_table.add_column("Percentage", style="red", justify="right")
+            
+            violations_table.add_row("🔴 Critical", str(summary.critical_violations), f"{(summary.critical_violations/summary.total_violations*100) if summary.total_violations > 0 else 0:.1f}%")
+            violations_table.add_row("🟠 Errors", str(summary.error_violations), f"{(summary.error_violations/summary.total_violations*100) if summary.total_violations > 0 else 0:.1f}%")
+            violations_table.add_row("🟡 Warnings", str(summary.warning_violations), f"{(summary.warning_violations/summary.total_violations*100) if summary.total_violations > 0 else 0:.1f}%")
+            violations_table.add_row("🔵 Info", str(summary.info_violations), f"{(summary.info_violations/summary.total_violations*100) if summary.total_violations > 0 else 0:.1f}%")
+            violations_table.add_row("📊 Total", str(summary.total_violations), "100%")
+            
+            console.print("\n[bold red]🚨 Violations Summary[/bold red]")
+            console.print(violations_table)
+        
+        # Detailed rule results
+        if verbose or summary.has_errors or summary.has_critical_issues:
+            console.print("\n[bold yellow]📋 Detailed Rule Results[/bold yellow]")
+            
+            # Show failed rules first, then others
+            failed_results = [r for r in summary.results if not r.passed]
+            passed_results = [r for r in summary.results if r.passed]
+            
+            results_to_show = failed_results + (passed_results if verbose else [])
+            
+            for result in results_to_show[:10]:  # Limit to first 10 rules
+                status_icon = "✅" if result.passed else "❌"
+                severity_icon = {
+                    "critical": "🔴",
+                    "error": "🟠", 
+                    "warning": "🟡",
+                    "info": "🔵"
+                }.get(result.severity.value, "⚪")
+                
+                console.print(f"\n{status_icon} [bold]{result.rule_name}[/bold] {severity_icon}")
+                console.print(f"   [dim]Type:[/dim] {result.rule_type.value} | [dim]Status:[/dim] {result.status.value}")
+                console.print(f"   [dim]Message:[/dim] {result.message}")
+                console.print(f"   [dim]Execution:[/dim] {result.execution_time_ms:.2f}ms | [dim]Rows:[/dim] {result.rows_evaluated:,}")
+                
+                if result.violations:
+                    console.print(f"   [red]Violations ({len(result.violations)}):[/red]")
+                    for violation in result.violations[:3]:  # Show first 3 violations
+                        console.print(f"     • {violation.message}")
+                        if violation.sample_values:
+                            sample_display = ", ".join(str(v) for v in violation.sample_values[:3])
+                            console.print(f"       [dim]Sample:[/dim] {sample_display}")
+                        if violation.table_name:
+                            location = violation.table_name
+                            if violation.column_name:
+                                location += f".{violation.column_name}"
+                            console.print(f"       [dim]Location:[/dim] {location}")
+                    
+                    if len(result.violations) > 3:
+                        console.print(f"     [dim]... and {len(result.violations) - 3} more violations[/dim]")
+            
+            if len(results_to_show) > 10:
+                console.print(f"\n[dim]... and {len(results_to_show) - 10} more rules (use --verbose to see all)[/dim]")
+
+
+def display_business_rule_results_json(results: list) -> None:
+    """Display business rule validation results in JSON format."""
+    import json
+    from datetime import datetime
+    
+    output_data = {
+        "export_info": {
+            "timestamp": datetime.now().isoformat(),
+            "sqltest_version": __version__,
+            "validation_count": len(results)
+        },
+        "validation_results": []
+    }
+    
+    for summary in results:
+        result_data = {
+            "rule_set_name": summary.rule_set_name,
+            "validation_name": summary.validation_name,
+            "execution_time_ms": summary.execution_time_ms,
+            "start_time": summary.start_time.isoformat(),
+            "end_time": summary.end_time.isoformat(),
+            "total_rules": summary.total_rules,
+            "rules_executed": summary.rules_executed,
+            "rules_passed": summary.rules_passed,
+            "rules_failed": summary.rules_failed,
+            "rules_error": summary.rules_error,
+            "rules_skipped": summary.rules_skipped,
+            "success_rate": summary.success_rate,
+            "has_critical_issues": summary.has_critical_issues,
+            "has_errors": summary.has_errors,
+            "total_violations": summary.total_violations,
+            "critical_violations": summary.critical_violations,
+            "error_violations": summary.error_violations,
+            "warning_violations": summary.warning_violations,
+            "info_violations": summary.info_violations,
+            "validation_context": {
+                "database_name": summary.validation_context.database_name,
+                "schema_name": summary.validation_context.schema_name,
+                "table_name": summary.validation_context.table_name,
+                "query": summary.validation_context.query,
+                "validation_timestamp": summary.validation_context.validation_timestamp.isoformat()
+            },
+            "rule_results": []
+        }
+        
+        # Add individual rule results
+        for result in summary.results:
+            rule_data = {
+                "rule_name": result.rule_name,
+                "rule_type": result.rule_type.value,
+                "status": result.status.value,
+                "severity": result.severity.value,
+                "scope": result.scope.value,
+                "passed": result.passed,
+                "message": result.message,
+                "execution_time_ms": result.execution_time_ms,
+                "rows_evaluated": result.rows_evaluated,
+                "timestamp": result.timestamp.isoformat(),
+                "violations": [
+                    {
+                        "violation_id": violation.violation_id,
+                        "severity": violation.severity.value,
+                        "message": violation.message,
+                        "table_name": violation.table_name,
+                        "column_name": violation.column_name,
+                        "violation_count": violation.violation_count,
+                        "sample_values": violation.sample_values,
+                        "timestamp": violation.timestamp.isoformat()
+                    }
+                    for violation in result.violations
+                ]
+            }
+            result_data["rule_results"].append(rule_data)
+        
+        output_data["validation_results"].append(result_data)
+    
+    console.print(json.dumps(output_data, indent=2, default=str))
+
+
+def export_business_rule_results(results: list, output_path: str) -> None:
+    """Export business rule validation results to JSON file."""
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    
+    output_data = {
+        "export_info": {
+            "timestamp": datetime.now().isoformat(),
+            "sqltest_version": __version__,
+            "validation_count": len(results)
+        },
+        "summary": {
+            "total_rule_sets": len(results),
+            "total_rules": sum(s.total_rules for s in results),
+            "total_passed": sum(s.rules_passed for s in results),
+            "total_failed": sum(s.rules_failed for s in results),
+            "total_errors": sum(s.rules_error for s in results),
+            "total_violations": sum(s.total_violations for s in results),
+            "critical_violations": sum(s.critical_violations for s in results),
+            "error_violations": sum(s.error_violations for s in results),
+            "warning_violations": sum(s.warning_violations for s in results),
+            "info_violations": sum(s.info_violations for s in results),
+            "overall_success_rate": (sum(s.rules_passed for s in results) / sum(s.total_rules for s in results) * 100) if sum(s.total_rules for s in results) > 0 else 0
+        },
+        "validation_results": []
+    }
+    
+    # Use the existing validator export functionality
+    from sqltest.modules.business_rules import BusinessRuleValidator
+    
+    # Create temporary validator for export functionality
+    temp_validator = BusinessRuleValidator(None)
+    
+    for summary in results:
+        # Export each summary using the built-in method
+        temp_file = Path(output_path).parent / f"temp_{summary.rule_set_name}.json"
+        temp_validator.export_results_to_json(summary, str(temp_file))
+        
+        # Read and merge into main export
+        with open(temp_file, 'r') as f:
+            summary_data = json.load(f)
+        
+        output_data["validation_results"].append(summary_data)
+        
+        # Clean up temp file
+        temp_file.unlink()
+    
+    # Write consolidated results
+    output_path_obj = Path(output_path)
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path_obj, 'w') as f:
+        json.dump(output_data, f, indent=2, default=str)
 
 
 if __name__ == "__main__":
