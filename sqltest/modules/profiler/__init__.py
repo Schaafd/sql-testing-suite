@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ...db.connection import ConnectionManager
-from ...exceptions import ProfilerError, DatabaseError
+from ...exceptions import ProfilingError, DatabaseError
 from .analyzer import DataAnalyzer
 from .models import TableProfile, QueryProfile, ColumnStatistics
 
@@ -45,7 +45,7 @@ class DataProfiler:
             TableProfile with complete analysis
             
         Raises:
-            ProfilerError: If profiling fails
+            ProfilingError: If profiling fails
             DatabaseError: If database operations fail
         """
         try:
@@ -68,10 +68,10 @@ class DataProfiler:
                     query += f" LIMIT {sample_rows}"
             
             # Execute query and get results
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty:
-                raise ProfilerError(f"No data found in table '{table_name}'")
+                raise ProfilingError(f"No data found in table '{table_name}'")
             
             # Profile the data
             db_name = database_name or self.connection_manager.config.default_database
@@ -84,7 +84,7 @@ class DataProfiler:
             
             # Enhance with database metadata if available
             try:
-                table_info = self.connection_manager.get_table_info(table_name, schema_name, database_name)
+                table_info = self.connection_manager.get_table_info(table_name, schema_name, db_name=database_name)
                 
                 # Extract primary key information from column metadata
                 primary_keys = []
@@ -103,7 +103,7 @@ class DataProfiler:
         except DatabaseError:
             raise
         except Exception as e:
-            raise ProfilerError(f"Failed to profile table '{table_name}': {e}") from e
+            raise ProfilingError(f"Failed to profile table '{table_name}': {e}") from e
     
     def profile_query(
         self, 
@@ -120,12 +120,12 @@ class DataProfiler:
             QueryProfile with analysis results
             
         Raises:
-            ProfilerError: If profiling fails
+            ProfilingError: If profiling fails
             DatabaseError: If query execution fails
         """
         try:
             # Execute query and measure time
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty:
                 # Create empty profile for queries with no results
@@ -153,7 +153,7 @@ class DataProfiler:
         except DatabaseError:
             raise
         except Exception as e:
-            raise ProfilerError(f"Failed to profile query: {e}") from e
+            raise ProfilingError(f"Failed to profile query: {e}") from e
     
     def profile_column(
         self, 
@@ -176,7 +176,7 @@ class DataProfiler:
             ColumnStatistics with detailed analysis
             
         Raises:
-            ProfilerError: If profiling fails
+            ProfilingError: If profiling fails
         """
         try:
             # Build query for single column
@@ -192,10 +192,10 @@ class DataProfiler:
                     query += f" LIMIT {sample_rows}"
             
             # Execute query and get results
-            result = self.connection_manager.execute_query(query, database_name=database_name)
+            result = self.connection_manager.execute_query(query, db_name=database_name)
             
             if result.is_empty or column_name not in result.data.columns:
-                raise ProfilerError(f"Column '{column_name}' not found in table '{table_name}'")
+                raise ProfilingError(f"Column '{column_name}' not found in table '{table_name}'")
             
             # Analyze the specific column
             column_stats = self.analyzer.analyze_column(result.data[column_name], column_name)
@@ -205,7 +205,7 @@ class DataProfiler:
         except DatabaseError:
             raise
         except Exception as e:
-            raise ProfilerError(f"Failed to profile column '{column_name}' in table '{table_name}': {e}") from e
+            raise ProfilingError(f"Failed to profile column '{column_name}' in table '{table_name}': {e}") from e
     
     def get_database_profile_summary(
         self, 
@@ -248,7 +248,7 @@ class DataProfiler:
             return summary
             
         except Exception as e:
-            raise ProfilerError(f"Failed to get database profile summary: {e}") from e
+            raise ProfilingError(f"Failed to get database profile summary: {e}") from e
 
 
 # Convenience functions for direct use

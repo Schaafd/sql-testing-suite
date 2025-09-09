@@ -86,24 +86,45 @@ def show_dashboard() -> None:
 @click.option("--columns", help="Specific columns to profile (comma-separated)")
 @click.option("--sample", type=int, default=10000, help="Sample size for analysis")
 @click.option("--database", "-d", help="Database to use (default: default database)")
+@click.option("--output", "-o", type=click.Path(), help="Export profile results to JSON file")
+@click.option("--schema", "-s", help="Schema name (database-specific)")
+@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", help="Output format")
 @click.pass_context
-def profile(ctx: click.Context, table: str, query: str, columns: str, sample: int, database: str) -> None:
-    """📊 Profile data in tables or queries."""
+def profile(ctx: click.Context, table: str, query: str, columns: str, sample: int, database: str,
+           output: str, schema: str, output_format: str) -> None:
+    """📊 Profile data in tables or queries with comprehensive statistical analysis.
+    
+    Generates detailed data profiles including:
+    • Data quality scores (completeness, uniqueness, validity, consistency)
+    • Statistical analysis (mean, median, quartiles, outliers)
+    • Pattern detection (emails, phones, URLs, etc.)
+    • Data type inference and validation
+    • Value frequency analysis
+    • Recommendations for data quality improvements
+    """
     if not table and not query:
         console.print("[red]Error: Either --table or --query must be specified[/red]")
         return
     
     try:
+        from sqltest.modules.profiler import DataProfiler
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+        import json
+        from pathlib import Path
+        
         config = get_config(ctx.obj.get('config'))
         manager = get_connection_manager(config)
         db_name = database or ctx.obj.get('db') or config.default_database
         
-        console.print(f"[bold blue]Data Profiling - Database: {db_name}[/bold blue]\n")
+        console.print(f"[bold blue]📊 Data Profiling - Database: {db_name}[/bold blue]\n")
+        
+        # Initialize profiler
+        profiler = DataProfiler(manager, sample_size=sample)
         
         if table:
-            profile_table(manager, db_name, table, columns, sample)
+            profile_table_advanced(profiler, db_name, table, columns, sample, schema, output, output_format)
         elif query:
-            profile_query(manager, db_name, query, sample)
+            profile_query_advanced(profiler, db_name, query, sample, output, output_format)
             
     except ConfigurationError as e:
         console.print(f"[red]Configuration Error: {e}[/red]")
@@ -112,176 +133,295 @@ def profile(ctx: click.Context, table: str, query: str, columns: str, sample: in
         console.print(f"[red]Database Error: {e}[/red]")
         sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        if ctx.obj.get('verbose'):
+            import traceback
+            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        else:
+            console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
 
 
-def profile_table(manager, db_name: str, table: str, columns: str, sample: int) -> None:
-    """Profile a specific table."""
-    console.print(f"📊 Profiling table: [green]{table}[/green]\n")
+def profile_table_advanced(profiler, db_name: str, table: str, columns: str, sample: int, 
+                          schema: str, output: str, output_format: str) -> None:
+    """Profile a specific table using advanced DataProfiler."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    import json
+    from pathlib import Path
+    import dataclasses
     
-    # Get table information
-    try:
-        table_info = manager.get_table_info(table, db_name=db_name)
+    console.print(f"📊 Profiling table: [green]{table}[/green]")
+    if columns:
+        console.print(f"Columns: [cyan]{columns}[/cyan]")
+    console.print(f"Sample Size: [cyan]{sample:,}[/cyan]")
+    console.print()
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]Analyzing table data...", total=100)
         
-        # Show table overview
-        console.print(f"[bold cyan]Table Overview[/bold cyan]")
-        overview_table = Table(show_header=False, box=None)
-        overview_table.add_column("Property", style="yellow", width=15)
-        overview_table.add_column("Value", style="white")
-        
-        overview_table.add_row("Table Name:", table_info['table_name'])
-        overview_table.add_row("Schema:", table_info.get('schema', 'N/A'))
-        overview_table.add_row("Total Rows:", f"{table_info['row_count']:,}")
-        overview_table.add_row("Total Columns:", str(len(table_info['columns'])))
-        
-        console.print(overview_table)
-        console.print()
-        
-        # Show column information
-        if table_info['columns']:
-            console.print(f"[bold cyan]Column Information[/bold cyan]")
+        try:
+            # Parse column filter
+            column_list = [c.strip() for c in columns.split(',')] if columns else None
             
-            columns_table = Table(show_header=True, header_style="bold magenta")
-            columns_table.add_column("Column", style="cyan")
-            columns_table.add_column("Type", style="green")
-            columns_table.add_column("Nullable", style="yellow")
-            columns_table.add_column("Default", style="blue")
+            # Run profiling
+            profile = profiler.profile_table(
+                table_name=table,
+                database_name=db_name,
+                schema_name=schema,
+                columns=column_list,
+                sample_rows=sample
+            )
             
-            # Filter columns if specified
-            column_filter = [c.strip() for c in columns.split(',')] if columns else None
+            progress.update(task, completed=100)
             
-            for col in table_info['columns']:
-                col_name = col.get('column_name', col.get('name', 'Unknown'))
-                
-                if column_filter and col_name not in column_filter:
-                    continue
-                    
-                data_type = col.get('data_type', col.get('type', 'Unknown'))
-                nullable = col.get('is_nullable', 'Unknown')
-                default = col.get('column_default', col.get('dflt_value', 'None'))
-                
-                # Format values
-                nullable_display = "✓" if nullable == 'YES' or nullable == 1 else "✗" if nullable == 'NO' or nullable == 0 else str(nullable)
-                default_display = str(default) if default else "None"
-                
-                columns_table.add_row(
-                    col_name,
-                    data_type,
-                    nullable_display,
-                    default_display[:30] + "..." if len(default_display) > 30 else default_display
-                )
-            
-            console.print(columns_table)
-            
-        # Sample data preview
-        if table_info['row_count'] > 0:
-            console.print(f"\n[bold cyan]Sample Data (first 5 rows)[/bold cyan]")
-            try:
-                sample_query = f"SELECT * FROM {table} LIMIT 5"
-                result = manager.execute_query(sample_query, db_name=db_name)
-                
-                if not result.is_empty:
-                    data_table = Table(show_header=True, header_style="bold magenta")
-                    
-                    # Add columns
-                    for col in result.columns:
-                        data_table.add_column(col, style="white", max_width=20)
-                    
-                    # Add rows
-                    for row in result.data.to_dict('records'):
-                        formatted_row = []
-                        for col in result.columns:
-                            value = str(row.get(col, 'NULL'))
-                            # Truncate long values
-                            if len(value) > 18:
-                                value = value[:15] + "..."
-                            formatted_row.append(value)
-                        data_table.add_row(*formatted_row)
-                    
-                    console.print(data_table)
-                else:
-                    console.print("[yellow]No sample data available[/yellow]")
-            except Exception as e:
-                console.print(f"[yellow]Could not fetch sample data: {e}[/yellow]")
-        else:
-            console.print("\n[yellow]Table is empty - no sample data available[/yellow]")
-            
-    except Exception as e:
-        raise DatabaseError(f"Failed to profile table '{table}': {e}")
+        except Exception as e:
+            progress.update(task, completed=100)
+            raise e
+    
+    # Display results based on format
+    if output_format == "json":
+        display_profile_json(profile)
+    else:
+        display_profile_table(profile)
+    
+    # Export to file if requested
+    if output:
+        export_profile_results(profile, output)
 
 
-def profile_query(manager, db_name: str, query: str, sample: int) -> None:
-    """Profile a custom query."""
-    console.print(f"📊 Profiling query: [green]{query[:50]}{'...' if len(query) > 50 else ''}[/green]\n")
+def profile_query_advanced(profiler, db_name: str, query: str, sample: int, 
+                          output: str, output_format: str) -> None:
+    """Profile a custom query using advanced DataProfiler."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn
     
-    try:
-        # Execute the query with limit for sampling
-        if sample > 0 and not query.upper().strip().startswith('SELECT'):
-            console.print("[yellow]Warning: Sample size only applies to SELECT queries[/yellow]")
+    console.print(f"📊 Profiling query: [green]{query[:60]}{'...' if len(query) > 60 else ''}[/green]")
+    console.print()
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]Executing and analyzing query...", total=100)
         
-        # Add LIMIT if it's a SELECT query and doesn't already have one
-        executed_query = query
-        if (sample > 0 and query.upper().strip().startswith('SELECT') and 
-            'LIMIT' not in query.upper() and 'TOP ' not in query.upper()):
-            executed_query = f"{query.rstrip(';')} LIMIT {sample}"
+        try:
+            # Run query profiling
+            profile = profiler.profile_query(query, database_name=db_name)
+            
+            progress.update(task, completed=100)
+            
+        except Exception as e:
+            progress.update(task, completed=100)
+            raise e
+    
+    # Display results based on format
+    if output_format == "json":
+        display_query_profile_json(profile)
+    else:
+        display_query_profile_table(profile)
+    
+    # Export to file if requested
+    if output:
+        export_query_profile_results(profile, output)
+
+
+def display_profile_table(profile) -> None:
+    """Display table profile results in Rich table format."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    
+    # Table overview
+    console.print(f"\n[bold cyan]📋 TABLE OVERVIEW[/bold cyan]")
+    overview_table = Table(show_header=False, box=None)
+    overview_table.add_column("Property", style="yellow", width=20)
+    overview_table.add_column("Value", style="white")
+    
+    overview_table.add_row("Table Name:", profile.table_name)
+    overview_table.add_row("Database:", profile.database_name)
+    if profile.schema_name:
+        overview_table.add_row("Schema:", profile.schema_name)
+    overview_table.add_row("Total Rows:", f"{profile.total_rows:,}")
+    overview_table.add_row("Total Columns:", str(profile.total_columns))
+    overview_table.add_row("Analysis Time:", f"{profile.execution_time:.2f}s")
+    
+    console.print(overview_table)
+    
+    # Data quality scores
+    console.print(f"\n[bold cyan]📈 DATA QUALITY SCORES[/bold cyan]")
+    scores_table = Table(show_header=False, box=None)
+    scores_table.add_column("Metric", style="yellow", width=20)
+    scores_table.add_column("Score", style="green")
+    
+    scores_table.add_row("Completeness:", f"{profile.completeness_score:.1f}%")
+    scores_table.add_row("Uniqueness:", f"{profile.uniqueness_score:.1f}%")
+    scores_table.add_row("Validity:", f"{profile.validity_score:.1f}%")
+    scores_table.add_row("Consistency:", f"{profile.consistency_score:.1f}%")
+    scores_table.add_row("Overall Quality:", f"[bold]{profile.overall_score:.1f}%[/bold]")
+    
+    console.print(scores_table)
+    
+    # Column analysis summary
+    console.print(f"\n[bold cyan]📝 COLUMN ANALYSIS SUMMARY[/bold cyan]")
+    columns_table = Table(show_header=True, header_style="bold magenta")
+    columns_table.add_column("Column", style="cyan")
+    columns_table.add_column("Type", style="green")
+    columns_table.add_column("Nulls", style="yellow", justify="right")
+    columns_table.add_column("Unique", style="blue", justify="right")
+    columns_table.add_column("Quality", style="white", justify="right")
+    
+    for column_name, stats in profile.columns.items():
+        # Calculate column quality score (simplified)
+        quality = 100 - stats.null_percentage
+        quality_display = f"{quality:.1f}%"
         
-        result = manager.execute_query(executed_query, db_name=db_name)
+        columns_table.add_row(
+            column_name,
+            stats.data_type,
+            f"{stats.null_percentage:.1f}%",
+            f"{stats.unique_percentage:.1f}%",
+            quality_display
+        )
+    
+    console.print(columns_table)
+    
+    # Show top patterns detected
+    patterns_found = []
+    for column_name, stats in profile.columns.items():
+        if stats.patterns:
+            for pattern in stats.patterns[:1]:  # Top pattern per column
+                patterns_found.append({
+                    'column': column_name,
+                    'pattern': pattern['pattern_name'],
+                    'confidence': pattern['match_percentage']
+                })
+    
+    if patterns_found:
+        console.print(f"\n[bold cyan]🔍 TOP PATTERNS DETECTED[/bold cyan]")
+        patterns_table = Table(show_header=True, header_style="bold magenta")
+        patterns_table.add_column("Column", style="cyan")
+        patterns_table.add_column("Pattern", style="green")
+        patterns_table.add_column("Match %", style="yellow", justify="right")
         
-        # Show query results overview
-        console.print(f"[bold cyan]Query Results Overview[/bold cyan]")
-        overview_table = Table(show_header=False, box=None)
-        overview_table.add_column("Property", style="yellow", width=15)
-        overview_table.add_column("Value", style="white")
+        for pattern in patterns_found[:5]:  # Show top 5 patterns
+            patterns_table.add_row(
+                pattern['column'],
+                pattern['pattern'],
+                f"{pattern['confidence']:.1f}%"
+            )
         
-        overview_table.add_row("Rows Returned:", f"{result.row_count:,}")
-        overview_table.add_row("Columns:", str(len(result.columns)))
-        overview_table.add_row("Execution Time:", f"{result.execution_time:.3f}s")
+        console.print(patterns_table)
+    
+    # Warnings and recommendations
+    if profile.warnings or profile.recommendations:
+        console.print(f"\n[bold cyan]⚠️  INSIGHTS & RECOMMENDATIONS[/bold cyan]")
         
-        console.print(overview_table)
-        console.print()
+        if profile.warnings:
+            console.print("[bold yellow]Warnings:[/bold yellow]")
+            for warning in profile.warnings[:3]:  # Show top 3 warnings
+                console.print(f"  • {warning}")
         
-        # Show column information
-        if result.columns:
-            console.print(f"[bold cyan]Result Columns[/bold cyan]")
-            
-            columns_info = ", ".join([f"[cyan]{col}[/cyan]" for col in result.columns])
-            console.print(columns_info)
-            console.print()
+        if profile.recommendations:
+            console.print("[bold green]Recommendations:[/bold green]")
+            for rec in profile.recommendations[:3]:  # Show top 3 recommendations
+                console.print(f"  • {rec}")
+
+
+def display_query_profile_table(profile) -> None:
+    """Display query profile results in Rich table format."""
+    from rich.table import Table
+    
+    # Query overview
+    console.print(f"\n[bold cyan]📅 QUERY PROFILE[/bold cyan]")
+    overview_table = Table(show_header=False, box=None)
+    overview_table.add_column("Property", style="yellow", width=20)
+    overview_table.add_column("Value", style="white")
+    
+    overview_table.add_row("Execution Time:", f"{profile.execution_time:.3f}s")
+    overview_table.add_row("Rows Returned:", f"{profile.rows_returned:,}")
+    overview_table.add_row("Columns:", str(profile.columns_returned))
+    overview_table.add_row("Query Hash:", profile.query_hash[:16] + "...")
+    
+    console.print(overview_table)
+    
+    # Column analysis
+    if profile.columns:
+        console.print(f"\n[bold cyan]📝 RESULT COLUMNS ANALYSIS[/bold cyan]")
+        columns_table = Table(show_header=True, header_style="bold magenta")
+        columns_table.add_column("Column", style="cyan")
+        columns_table.add_column("Type", style="green")
+        columns_table.add_column("Nulls", style="yellow", justify="right")
+        columns_table.add_column("Unique", style="blue", justify="right")
         
-        # Show sample results
-        if not result.is_empty:
-            console.print(f"[bold cyan]Query Results (first 10 rows)[/bold cyan]")
-            
-            data_table = Table(show_header=True, header_style="bold magenta")
-            
-            # Add columns
-            for col in result.columns:
-                data_table.add_column(col, style="white", max_width=25)
-            
-            # Add up to 10 rows
-            for i, row in enumerate(result.data.to_dict('records')):
-                if i >= 10:  # Limit to 10 rows for display
-                    break
-                    
-                formatted_row = []
-                for col in result.columns:
-                    value = str(row.get(col, 'NULL'))
-                    # Truncate long values
-                    if len(value) > 22:
-                        value = value[:19] + "..."
-                    formatted_row.append(value)
-                data_table.add_row(*formatted_row)
-            
-            console.print(data_table)
-            
-            if result.row_count > 10:
-                console.print(f"\n[dim]... and {result.row_count - 10} more rows[/dim]")
-        else:
-            console.print("[yellow]Query returned no results[/yellow]")
-            
-    except Exception as e:
-        raise DatabaseError(f"Failed to execute query: {e}")
+        for column_name, stats in profile.columns.items():
+            columns_table.add_row(
+                column_name,
+                stats.data_type,
+                f"{stats.null_percentage:.1f}%",
+                f"{stats.unique_percentage:.1f}%"
+            )
+        
+        console.print(columns_table)
+
+
+def display_profile_json(profile) -> None:
+    """Display profile results as JSON."""
+    import json
+    import dataclasses
+    
+    profile_dict = dataclasses.asdict(profile)
+    json_output = json.dumps(profile_dict, indent=2, default=str)
+    console.print(json_output)
+
+
+def display_query_profile_json(profile) -> None:
+    """Display query profile results as JSON."""
+    import json
+    import dataclasses
+    
+    profile_dict = dataclasses.asdict(profile)
+    json_output = json.dumps(profile_dict, indent=2, default=str)
+    console.print(json_output)
+
+
+def export_profile_results(profile, output_path: str) -> None:
+    """Export profile results to file."""
+    import json
+    import dataclasses
+    from pathlib import Path
+    
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    
+    profile_dict = dataclasses.asdict(profile)
+    
+    with open(output, 'w') as f:
+        json.dump(profile_dict, f, indent=2, default=str)
+    
+    console.print(f"\n[green]✓ Profile results exported to: {output}[/green]")
+
+
+def export_query_profile_results(profile, output_path: str) -> None:
+    """Export query profile results to file."""
+    import json
+    import dataclasses
+    from pathlib import Path
+    
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    
+    profile_dict = dataclasses.asdict(profile)
+    
+    with open(output, 'w') as f:
+        json.dump(profile_dict, f, indent=2, default=str)
+    
+    console.print(f"\n[green]✓ Query profile results exported to: {output}[/green]")
 
 
 @cli.command()
