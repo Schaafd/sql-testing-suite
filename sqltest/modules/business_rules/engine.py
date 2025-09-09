@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Set, Callable, Any
 import pandas as pd
 import logging
 
-from ...database.manager import DatabaseManager
-from ...exceptions import ValidationError, DatabaseError, TimeoutError
+from ...db.connection import ConnectionManager
+from ...exceptions import ValidationError, DatabaseError
 from .models import (
     BusinessRule,
     RuleSet,
@@ -31,14 +31,14 @@ logger = logging.getLogger(__name__)
 class BusinessRuleEngine:
     """Core engine for executing business rules and validations."""
     
-    def __init__(self, db_manager: DatabaseManager, max_workers: int = 5):
+    def __init__(self, connection_manager: ConnectionManager, max_workers: int = 5):
         """Initialize the business rule engine.
         
         Args:
-            db_manager: Database manager for executing queries
+            connection_manager: Database connection manager for executing queries
             max_workers: Maximum number of worker threads for parallel execution
         """
-        self.db_manager = db_manager
+        self.connection_manager = connection_manager
         self.max_workers = max_workers
         self._rule_cache: Dict[str, Any] = {}
         self._dependency_graph: Dict[str, Set[str]] = {}
@@ -181,14 +181,15 @@ class BusinessRuleEngine:
     ) -> RuleResult:
         """Execute a SQL-based business rule."""
         try:
-            # Get database connection
-            adapter = self.db_manager.get_adapter(context.database_name)
+            # Get database adapter
+            adapter = self.connection_manager.get_adapter(context.database_name)
             if not adapter:
                 raise ValidationError(f"Database adapter not found: {context.database_name}")
             
             # Execute the rule query with timeout
             start_time = time.time()
-            result_df = adapter.execute_query(rule.sql_query, timeout=timeout)
+            result = adapter.execute_query(rule.sql_query, timeout=timeout)
+            result_df = result.data
             query_time = time.time() - start_time
             
             # Process results
@@ -254,9 +255,10 @@ class BusinessRuleEngine:
             data_df = pd.DataFrame()
             
             if context.query:
-                adapter = self.db_manager.get_adapter(context.database_name)
+                adapter = self.connection_manager.get_adapter(context.database_name)
                 if adapter:
-                    data_df = adapter.execute_query(context.query, timeout=timeout)
+                    result = adapter.execute_query(context.query, timeout=timeout)
+                    data_df = result.data
             
             # Execute custom function with timeout
             with ThreadPoolExecutor(max_workers=1) as executor:

@@ -471,3 +471,32 @@ def create_completeness_rule(table_name: str, required_columns: List[str], sever
             "required_columns": required_columns
         }
     )
+
+
+# Export all model classes and utility functions
+__all__ = [
+    # Enums
+    'RuleType',
+    'RuleSeverity',
+    'RuleStatus',
+    'ValidationScope',
+    
+    # Data classes
+    'RuleViolation',
+    'RuleResult',
+    'ValidationContext',
+    'BusinessRule',
+    'RuleSet',
+    'ValidationSummary',
+    
+    # Pydantic models
+    'BusinessRulePydantic',
+    'RuleSetPydantic',
+    
+    # Utility functions
+    'create_not_null_rule',
+    'create_uniqueness_rule',
+    'create_referential_integrity_rule',
+    'create_range_rule',
+    'create_completeness_rule'
+]

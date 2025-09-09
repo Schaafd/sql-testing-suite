@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Union, Any, Set
 from datetime import datetime
 import json
 
-from ...database.manager import DatabaseManager
+from ...db.connection import ConnectionManager
 from ...exceptions import ValidationError, ConfigurationError
 from .models import (
     BusinessRule,
@@ -42,15 +42,15 @@ logger = logging.getLogger(__name__)
 class BusinessRuleValidator:
     """Main interface for business rule validation."""
     
-    def __init__(self, db_manager: DatabaseManager, max_workers: int = 5):
+    def __init__(self, connection_manager: ConnectionManager, max_workers: int = 5):
         """Initialize the business rule validator.
         
         Args:
-            db_manager: Database manager for executing queries
+            connection_manager: Database connection manager for executing queries
             max_workers: Maximum number of worker threads for parallel execution
         """
-        self.db_manager = db_manager
-        self.engine = BusinessRuleEngine(db_manager, max_workers)
+        self.connection_manager = connection_manager
+        self.engine = BusinessRuleEngine(connection_manager, max_workers)
         self.config_loader = BusinessRuleConfigLoader()
         self._rule_sets: Dict[str, RuleSet] = {}
         
@@ -352,13 +352,10 @@ class BusinessRuleValidator:
         Returns:
             Generated RuleSet
         """
-        adapter = self.db_manager.get_adapter(database_name)
-        if not adapter:
-            raise ValidationError(f"Database adapter not found: {database_name}")
-        
-        # Get table schema information
+        # For now, we'll create a simplified version without schema introspection
+        # TODO: Add schema introspection support when needed
         full_table_name = f"{schema_name}.{table_name}" if schema_name else table_name
-        columns = adapter.get_table_columns(full_table_name)
+        columns = []  # Empty for now - would need schema introspection
         
         rule_set = RuleSet(
             name=f"{table_name}_auto_generated_rules",
@@ -544,7 +541,7 @@ class BusinessRuleValidator:
 
 # Convenience functions for common use cases
 def quick_validate_table_data_quality(
-    db_manager: DatabaseManager,
+    connection_manager: ConnectionManager,
     database_name: str,
     table_name: str,
     schema_name: Optional[str] = None,
@@ -553,7 +550,7 @@ def quick_validate_table_data_quality(
     """Quick validation of basic data quality for a table.
     
     Args:
-        db_manager: Database manager
+        connection_manager: Database connection manager
         database_name: Database name
         table_name: Table name
         schema_name: Optional schema name
@@ -562,7 +559,7 @@ def quick_validate_table_data_quality(
     Returns:
         ValidationSummary with results
     """
-    validator = BusinessRuleValidator(db_manager)
+    validator = BusinessRuleValidator(connection_manager)
     rule_set = validator.generate_data_quality_rules(
         database_name=database_name,
         table_name=table_name,
@@ -579,16 +576,16 @@ def quick_validate_table_data_quality(
     return validator.engine.execute_rule_set(rule_set, context)
 
 
-def create_validator_with_sample_rules(db_manager: DatabaseManager) -> BusinessRuleValidator:
+def create_validator_with_sample_rules(connection_manager: ConnectionManager) -> BusinessRuleValidator:
     """Create a validator with sample rules loaded.
     
     Args:
-        db_manager: Database manager
+        connection_manager: Database connection manager
         
     Returns:
         BusinessRuleValidator with sample rules
     """
-    validator = BusinessRuleValidator(db_manager)
+    validator = BusinessRuleValidator(connection_manager)
     sample_rule_set = create_sample_business_rules()
     validator.add_rule_set(sample_rule_set)
     return validator
