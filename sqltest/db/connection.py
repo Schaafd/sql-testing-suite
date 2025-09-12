@@ -170,6 +170,22 @@ class ConnectionManager:
         
         return results
     
+    def close_all_connections(self) -> None:
+        """Close all cached database connections and clear cache.
+        
+        This method should be called during test cleanup or when connections
+        need to be reset.
+        """
+        for adapter in self._adapters.values():
+            try:
+                if hasattr(adapter, '_engine') and adapter._engine:
+                    adapter._engine.dispose()
+                    adapter._engine = None
+            except Exception:
+                pass  # Ignore errors during cleanup
+        
+        self._adapters.clear()
+    
     def execute_query(
         self,
         query: str,
@@ -249,16 +265,6 @@ class ConnectionManager:
         
         return info
     
-    def close_all_connections(self) -> None:
-        """Close all database connections and cleanup resources."""
-        for adapter in self._adapters.values():
-            try:
-                adapter.close()
-            except Exception:
-                # Ignore errors when closing connections
-                pass
-        
-        self._adapters.clear()
     
     def close_connection(self, db_name: str) -> None:
         """Close specific database connection.
@@ -338,3 +344,17 @@ def set_connection_manager(manager: ConnectionManager) -> None:
     """
     global _connection_manager
     _connection_manager = manager
+
+
+def reset_connection_manager() -> None:
+    """Reset the global connection manager instance.
+    
+    This is primarily for testing to ensure clean state between tests.
+    """
+    global _connection_manager
+    if _connection_manager is not None:
+        try:
+            _connection_manager.close_all_connections()
+        except Exception:
+            pass  # Ignore errors during cleanup
+        _connection_manager = None
