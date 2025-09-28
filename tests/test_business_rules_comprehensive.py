@@ -343,10 +343,8 @@ rules:
         """Test loading rule set from YAML file."""
         # Create temporary YAML file
         sample_config = {
-            'rule_set': {
-                'name': 'test_rules',
-                'description': 'Test rule set'
-            },
+            'name': 'test_rules',
+            'description': 'Test rule set',
             'rules': [{
                 'name': 'test_rule',
                 'description': 'Test rule',
@@ -381,10 +379,8 @@ rules:
     def test_circular_dependency_detection(self, config_loader):
         """Test detection of circular dependencies in rules."""
         sample_config = {
-            'rule_set': {
-                'name': 'circular_test',
-                'description': 'Test circular dependencies'
-            },
+            'name': 'circular_test',
+            'description': 'Test circular dependencies',
             'rules': [
                 {
                     'name': 'rule_a',
@@ -414,19 +410,9 @@ rules:
             temp_file = f.name
 
         try:
-            rule_set = config_loader.load_rule_set_from_file(temp_file)
-
-            # The loader should create the rule set, but the engine should detect circular dependencies
-            mock_connection_manager = Mock(spec=ConnectionManager)
-            engine = BusinessRuleEngine(mock_connection_manager)
-
-            # Build dependency graph should detect the circular dependency
-            engine._build_dependency_graph(rule_set.rules)
-            # The topological sort should handle this gracefully (with warnings)
-            ordered_rules = engine._topological_sort(rule_set.rules)
-
-            # Should still return rules even with circular dependencies
-            assert len(ordered_rules) == 2
+            # The config loader should detect circular dependencies and raise ConfigurationError
+            with pytest.raises(ConfigurationError, match="Circular dependency detected"):
+                config_loader.load_rule_set_from_file(temp_file)
 
         finally:
             os.unlink(temp_file)
@@ -459,10 +445,8 @@ class TestBusinessRuleValidator:
         """Test loading rules from config and validating."""
         # Create a temporary config file
         sample_config = {
-            'rule_set': {
-                'name': 'integration_test',
-                'description': 'Integration test rules'
-            },
+            'name': 'integration_test',
+            'description': 'Integration test rules',
             'rules': [{
                 'name': 'test_rule',
                 'description': 'Test rule',
