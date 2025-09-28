@@ -1,0 +1,32 @@
+name: test_business_rules
+description: Sample business rules for testing
+enabled: true
+parallel_execution: false
+max_concurrent_rules: 3
+
+rules:
+  - name: data_quality_check
+    description: Basic data quality validation
+    rule_type: data_quality
+    severity: critical
+    scope: table
+    sql_query: |
+      SELECT 0 as violation_count,
+             'test_table' as table_name,
+             'No violations found' as message
+    enabled: true
+    timeout_seconds: 30.0
+    expected_violation_count: 0
+
+  - name: consistency_check
+    description: Data consistency validation
+    rule_type: consistency
+    severity: warning
+    scope: database
+    sql_query: |
+      SELECT 0 as violation_count,
+             'test_database' as table_name,
+             'Consistency check passed' as message
+    enabled: true
+    timeout_seconds: 60.0
+    dependencies: ["data_quality_check"]

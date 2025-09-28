@@ -299,11 +299,11 @@ class BusinessRuleConfigLoader:
         """Interpolate environment variables in a string value."""
         # Pattern for ${VAR_NAME} or ${VAR_NAME:default_value}
         env_pattern = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
-        
+
         def replace_env_var(match):
             var_name = match.group(1).strip()
             default_value = match.group(2) if match.group(2) is not None else ""
-            
+
             env_value = os.getenv(var_name)
             if env_value is not None:
                 return env_value
@@ -312,8 +312,30 @@ class BusinessRuleConfigLoader:
             else:
                 logger.warning(f"Environment variable '{var_name}' not found and no default provided")
                 return match.group(0)  # Return original if no value found
-        
+
         return env_pattern.sub(replace_env_var, value)
+
+    def _process_environment_variables(self, config_text: str) -> str:
+        """Process environment variable substitutions in raw text."""
+        # Pattern: ${VAR_NAME} or ${VAR_NAME:default_value}
+        pattern = r'\$\{([^}]+)\}'
+
+        def replace_env_var(match):
+            var_expression = match.group(1)
+
+            if ':' in var_expression:
+                var_name, default_value = var_expression.split(':', 1)
+            else:
+                var_name, default_value = var_expression, None
+
+            value = os.environ.get(var_name, default_value)
+
+            if value is None:
+                raise EnvironmentError(f"Required environment variable '{var_name}' is not set")
+
+            return value
+
+        return re.sub(pattern, replace_env_var, config_text)
     
     def _validate_rule_set(self, rule_set: RuleSet) -> None:
         """Perform additional validation on loaded rule set."""

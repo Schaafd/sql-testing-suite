@@ -133,6 +133,13 @@ def _cleanup_connections():
     except Exception:
         pass  # Ignore errors during cleanup
     
+    # Clear global config cache to ensure fresh config is loaded per test
+    try:
+        import sqltest.config.parser
+        sqltest.config.parser._loaded_config = None
+    except Exception:
+        pass  # Ignore errors during cleanup
+    
     # Clear SQLAlchemy connection pools
     try:
         sqlalchemy.pool.clear_managers()
@@ -381,7 +388,9 @@ class TestCLIProject:
             
             result = runner.invoke(cli, ['init', str(existing_dir)])
             assert result.exit_code == 0
-            assert 'already exists' in result.output
+            # Normalize whitespace to handle line breaks in error messages
+            normalized_output = ' '.join(result.output.split())
+            assert 'already exists' in normalized_output
 
 
 class TestCLIErrorHandling:

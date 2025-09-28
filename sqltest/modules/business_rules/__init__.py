@@ -128,6 +128,56 @@ class BusinessRuleValidator:
         """
         return list(self._rule_sets.keys())
     
+    def validate_from_config(
+        self,
+        config_path: Union[str, Path],
+        database_name: str,
+        schema_name: Optional[str] = None,
+        parallel: Optional[bool] = None,
+        fail_fast: bool = False,
+        tags: Optional[Set[str]] = None
+    ) -> ValidationSummary:
+        """Load rule set from config and validate.
+
+        Args:
+            config_path: Path to YAML configuration file
+            database_name: Database to validate
+            schema_name: Optional schema name
+            parallel: Override parallel execution setting
+            fail_fast: Stop on first critical failure
+            tags: Filter rules by tags
+
+        Returns:
+            ValidationSummary with results
+        """
+        # Load rule set from config
+        rule_set = self.config_loader.load_rule_set_from_file(config_path)
+
+        # Filter rules by tags if specified
+        if tags:
+            filtered_rules = [r for r in rule_set.rules if tags.intersection(r.tags)]
+            if not filtered_rules:
+                logger.warning(f"No rules match the specified tags: {tags}")
+                filtered_rules = []
+
+            # Create temporary rule set with filtered rules
+            filtered_rule_set = RuleSet(
+                name=f"{rule_set.name}_filtered",
+                description=f"Filtered version of {rule_set.name}",
+                rules=filtered_rules,
+                parallel_execution=rule_set.parallel_execution,
+                max_concurrent_rules=rule_set.max_concurrent_rules
+            )
+            rule_set = filtered_rule_set
+
+        context = ValidationContext(
+            database_name=database_name,
+            schema_name=schema_name,
+            metadata={"config_path": str(config_path)}
+        )
+
+        return self.engine.execute_rule_set(rule_set, context, parallel, fail_fast)
+
     def validate_with_rule_set(
         self,
         rule_set_name: str,
