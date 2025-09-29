@@ -298,7 +298,13 @@ def demo_data_profiler(sales_data, customer_data, product_data):
         from sqltest.modules.profiler import DataProfiler
 
         print_step("Initializing Data Profiler")
-        profiler = DataProfiler()
+
+        # For demo purposes, create a mock connection manager
+        class MockConnectionManager:
+            def execute_query(self, query: str):
+                return []
+
+        profiler = DataProfiler(MockConnectionManager())
 
         print_step("Profiling Sales Data", "Analyzing time series patterns and trends")
 
