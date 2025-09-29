@@ -20,6 +20,8 @@ from sqltest.db.base import BaseAdapter, QueryResult
 from sqltest.db.adapters.postgresql import PostgreSQLAdapter
 from sqltest.db.adapters.mysql import MySQLAdapter
 from sqltest.db.adapters.sqlite import SQLiteAdapter
+from sqltest.db.query_analyzer import QueryAnalyzer, QueryMetrics
+from sqltest.db.query_cache import QueryResultCache, CacheStrategy, CacheEvictionPolicy
 from sqltest.exceptions import DatabaseError
 
 
@@ -481,17 +483,41 @@ class AdvancedAdapterFactory:
 class AdvancedConnectionManager:
     """Advanced connection manager with enterprise-grade pooling and monitoring."""
 
-    def __init__(self, config: SQLTestConfig):
+    def __init__(self, config: SQLTestConfig, enable_query_analysis: bool = True,
+                 enable_result_cache: bool = True, cache_size_mb: int = 100):
         """Initialize advanced connection manager.
 
         Args:
             config: SQLTest configuration.
+            enable_query_analysis: Whether to enable query performance analysis.
+            enable_result_cache: Whether to enable query result caching.
+            cache_size_mb: Maximum cache size in megabytes.
         """
         self.config = config
         self._adapters: Dict[str, EnhancedAdapter] = {}
         self._monitors: Dict[str, ConnectionMonitor] = {}
         self._factory = AdvancedAdapterFactory()
         self._global_lock = Lock()
+
+        # Initialize query analyzer
+        self.enable_query_analysis = enable_query_analysis
+        if enable_query_analysis:
+            self.query_analyzer = QueryAnalyzer(max_history_size=50000, analysis_window_hours=48)
+        else:
+            self.query_analyzer = None
+
+        # Initialize query result cache
+        self.enable_result_cache = enable_result_cache
+        if enable_result_cache:
+            self.result_cache = QueryResultCache(
+                max_size_mb=cache_size_mb,
+                default_ttl_seconds=300,  # 5 minutes default
+                max_entries=10000,
+                eviction_policy=CacheEvictionPolicy.SMART,
+                cleanup_interval_seconds=60
+            )
+        else:
+            self.result_cache = None
 
         # Initialize monitors for each configured database
         for db_name in config.databases.keys():
@@ -618,8 +644,11 @@ class AdvancedConnectionManager:
         db_name: Optional[str] = None,
         fetch_results: bool = True,
         timeout: Optional[int] = None,
+        use_cache: bool = True,
+        cache_ttl: Optional[int] = None,
+        cache_strategy: CacheStrategy = CacheStrategy.SMART,
     ) -> QueryResult:
-        """Execute SQL query with performance tracking.
+        """Execute SQL query with caching, performance tracking and analysis.
 
         Args:
             query: SQL query string.
@@ -627,25 +656,119 @@ class AdvancedConnectionManager:
             db_name: Database connection name.
             fetch_results: Whether to fetch result data.
             timeout: Query timeout in seconds.
+            use_cache: Whether to use result caching (only for SELECT queries).
+            cache_ttl: Custom cache TTL in seconds.
+            cache_strategy: Caching strategy to use.
 
         Returns:
-            QueryResult instance with performance metrics.
+            QueryResult instance with performance metrics and analysis.
         """
         start_time = time.perf_counter()
+        db_name_used = db_name or self.config.default_database
+        is_select_query = query.strip().upper().startswith('SELECT')
+        cache_hit = False
+
         try:
+            # Try cache first for SELECT queries if caching is enabled
+            if (self.enable_result_cache and self.result_cache and
+                use_cache and is_select_query and fetch_results):
+
+                cached_result = self.result_cache.get(
+                    query=query,
+                    parameters=params,
+                    database_name=db_name_used or ""
+                )
+
+                if cached_result is not None:
+                    cache_hit = True
+                    execution_time = (time.perf_counter() - start_time) * 1000
+
+                    # Add cache metadata
+                    if hasattr(cached_result, 'metadata'):
+                        cached_result.metadata.update({
+                            'execution_time_ms': execution_time,
+                            'adapter_type': 'enhanced',
+                            'cache_hit': True,
+                            'retrieved_from_cache': True
+                        })
+
+                    logger.debug(f"Cache hit for query: {query[:50]}...")
+                    return cached_result
+
+            # Execute query on database
             adapter = self.get_adapter(db_name)
             result = adapter.execute_query(query, params, fetch_results, timeout)
 
-            # Add performance metrics to result
+            # Calculate execution time
             execution_time = (time.perf_counter() - start_time) * 1000
-            if hasattr(result, 'metadata'):
-                result.metadata['execution_time_ms'] = execution_time
-                result.metadata['adapter_type'] = 'enhanced'
+
+            # Cache result if conditions are met
+            if (self.enable_result_cache and self.result_cache and
+                use_cache and is_select_query and fetch_results and result):
+
+                try:
+                    self.result_cache.put(
+                        query=query,
+                        result=result,
+                        parameters=params,
+                        database_name=db_name_used or "",
+                        ttl_seconds=cache_ttl,
+                        strategy=cache_strategy
+                    )
+                    logger.debug(f"Cached query result: {query[:50]}...")
+                except Exception as e:
+                    logger.warning(f"Failed to cache query result: {e}")
+
+            # Perform query analysis if enabled
+            if self.enable_query_analysis and self.query_analyzer:
+                query_metrics = self.query_analyzer.analyze_query(
+                    sql=query,
+                    execution_time_ms=execution_time,
+                    rows_affected=result.row_count if result else 0,
+                    database_name=db_name_used or "unknown",
+                    connection_id=getattr(adapter, '_current_connection_id', None),
+                    parameters=params
+                )
+
+                # Add analysis results to result metadata
+                if hasattr(result, 'metadata'):
+                    result.metadata.update({
+                        'execution_time_ms': execution_time,
+                        'adapter_type': 'enhanced',
+                        'cache_hit': cache_hit,
+                        'query_hash': query_metrics.query_hash,
+                        'query_category': query_metrics.category.value,
+                        'query_complexity': query_metrics.complexity.value,
+                        'tables_accessed': query_metrics.table_names,
+                        'analysis_timestamp': query_metrics.timestamp.isoformat()
+                    })
+            else:
+                # Basic performance metrics without analysis
+                if hasattr(result, 'metadata'):
+                    result.metadata.update({
+                        'execution_time_ms': execution_time,
+                        'adapter_type': 'enhanced',
+                        'cache_hit': cache_hit
+                    })
 
             return result
 
         except Exception as e:
             execution_time = (time.perf_counter() - start_time) * 1000
+
+            # Record failed query in analyzer if enabled
+            if self.enable_query_analysis and self.query_analyzer:
+                try:
+                    self.query_analyzer.analyze_query(
+                        sql=query,
+                        execution_time_ms=execution_time,
+                        rows_affected=0,
+                        database_name=db_name_used or "unknown",
+                        parameters=params
+                    )
+                except Exception:
+                    pass  # Don't let analysis errors interfere with main error
+
             logger.error(f"Query execution failed after {execution_time:.2f}ms: {e}")
             raise
 
@@ -653,6 +776,10 @@ class AdvancedConnectionManager:
         """Close all cached database connections and stop monitoring."""
         # Stop all monitoring first
         self.stop_monitoring()
+
+        # Shutdown query result cache
+        if self.enable_result_cache and self.result_cache:
+            self.result_cache.shutdown()
 
         # Close all adapters
         for adapter in self._adapters.values():
@@ -895,3 +1022,278 @@ class AdvancedConnectionManager:
         except Exception as e:
             logger.error(f"Failover failed: {e}")
             return False
+
+    # Cache Management Methods
+
+    def get_cache_statistics(self) -> Dict[str, Any]:
+        """Get query result cache statistics.
+
+        Returns:
+            Dictionary with cache performance statistics.
+        """
+        if not self.enable_result_cache or not self.result_cache:
+            return {'message': 'Query result cache is not enabled'}
+
+        return self.result_cache.get_statistics()
+
+    def clear_query_cache(self):
+        """Clear all cached query results."""
+        if self.enable_result_cache and self.result_cache:
+            self.result_cache.clear()
+            logger.info("Query result cache cleared")
+
+    def invalidate_cache_by_table(self, table_name: str):
+        """Invalidate cached queries that depend on a specific table.
+
+        Args:
+            table_name: Name of the table that was modified
+        """
+        if self.enable_result_cache and self.result_cache:
+            self.result_cache.invalidate_by_table(table_name)
+
+    def invalidate_cache_by_pattern(self, pattern: str):
+        """Invalidate cached queries matching a SQL pattern.
+
+        Args:
+            pattern: SQL pattern to match (case-insensitive)
+        """
+        if self.enable_result_cache and self.result_cache:
+            self.result_cache.invalidate_by_pattern(pattern)
+
+    def warm_cache_with_queries(self, queries: List[Tuple[str, Optional[Dict[str, Any]], Optional[str]]]):
+        """Warm the cache by executing a list of common queries.
+
+        Args:
+            queries: List of tuples (query, params, db_name) to execute and cache
+        """
+        if not self.enable_result_cache or not self.result_cache:
+            logger.warning("Cache warming requested but caching is not enabled")
+            return
+
+        warmed_count = 0
+        for query, params, db_name in queries:
+            try:
+                # Execute query with caching enabled
+                result = self.execute_query(
+                    query=query,
+                    params=params,
+                    db_name=db_name,
+                    use_cache=True,
+                    cache_strategy=CacheStrategy.ADAPTIVE
+                )
+                if result:
+                    warmed_count += 1
+                    logger.debug(f"Warmed cache with query: {query[:50]}...")
+            except Exception as e:
+                logger.warning(f"Failed to warm cache with query: {e}")
+
+        logger.info(f"Cache warming completed: {warmed_count}/{len(queries)} queries cached")
+
+    def configure_cache(self, max_size_mb: Optional[int] = None,
+                       default_ttl_seconds: Optional[int] = None,
+                       eviction_policy: Optional[CacheEvictionPolicy] = None):
+        """Reconfigure cache settings.
+
+        Args:
+            max_size_mb: New maximum cache size in megabytes
+            default_ttl_seconds: New default TTL for cached results
+            eviction_policy: New eviction policy
+        """
+        if not self.enable_result_cache or not self.result_cache:
+            logger.warning("Cache configuration requested but caching is not enabled")
+            return
+
+        if max_size_mb is not None:
+            self.result_cache.max_size_bytes = max_size_mb * 1024 * 1024
+
+        if default_ttl_seconds is not None:
+            self.result_cache.default_ttl_seconds = default_ttl_seconds
+
+        if eviction_policy is not None:
+            self.result_cache.eviction_policy = eviction_policy
+
+        logger.info(f"Cache configuration updated: size={max_size_mb}MB, ttl={default_ttl_seconds}s, policy={eviction_policy}")
+
+    # Query Analysis Methods
+
+    def get_query_performance_report(self) -> Dict[str, Any]:
+        """Get comprehensive query performance report.
+
+        Returns:
+            Dictionary with query performance analysis and recommendations.
+        """
+        if not self.enable_query_analysis or not self.query_analyzer:
+            return {'message': 'Query analysis is not enabled'}
+
+        report = {
+            'summary': self.query_analyzer.get_summary_report(),
+            'slow_queries': [
+                {
+                    'query_hash': s.query_hash,
+                    'sql_pattern': s.sql_pattern[:200] + "..." if len(s.sql_pattern) > 200 else s.sql_pattern,
+                    'avg_execution_time_ms': s.avg_execution_time_ms,
+                    'execution_count': s.execution_count,
+                    'total_time_ms': s.total_execution_time_ms,
+                    'complexity': s.complexity.value,
+                    'category': s.category.value,
+                    'tables': s.frequent_tables[:5]  # Top 5 tables
+                }
+                for s in self.query_analyzer.get_slow_queries(threshold_ms=1000, limit=20)
+            ],
+            'frequent_queries': [
+                {
+                    'query_hash': s.query_hash,
+                    'sql_pattern': s.sql_pattern[:200] + "..." if len(s.sql_pattern) > 200 else s.sql_pattern,
+                    'execution_count': s.execution_count,
+                    'avg_execution_time_ms': s.avg_execution_time_ms,
+                    'complexity': s.complexity.value,
+                    'category': s.category.value
+                }
+                for s in self.query_analyzer.get_frequent_queries(min_executions=50, limit=20)
+            ],
+            'optimization_suggestions': [
+                {
+                    'query_hash': s.query_hash,
+                    'type': s.suggestion_type,
+                    'description': s.description,
+                    'impact': s.potential_impact,
+                    'effort': s.implementation_effort,
+                    'recommendations': s.details.get('recommendations', [])
+                }
+                for s in self.query_analyzer.generate_optimization_suggestions()
+            ],
+            'patterns': self.query_analyzer.analyze_query_patterns(),
+            'timestamp': datetime.now().isoformat()
+        }
+
+        return report
+
+    def get_query_statistics(self, query_hash: Optional[str] = None,
+                           category: Optional[str] = None,
+                           limit: int = 100) -> List[Dict[str, Any]]:
+        """Get query statistics in a serializable format.
+
+        Args:
+            query_hash: Specific query hash to get stats for
+            category: Filter by query category
+            limit: Maximum number of results
+
+        Returns:
+            List of query statistics dictionaries
+        """
+        if not self.enable_query_analysis or not self.query_analyzer:
+            return []
+
+        from sqltest.db.query_analyzer import QueryCategory
+
+        # Convert category string to enum if provided
+        category_enum = None
+        if category:
+            try:
+                category_enum = QueryCategory(category.lower())
+            except ValueError:
+                logger.warning(f"Invalid query category: {category}")
+
+        stats = self.query_analyzer.get_query_statistics(
+            query_hash=query_hash,
+            category=category_enum,
+            limit=limit
+        )
+
+        return [
+            {
+                'query_hash': s.query_hash,
+                'sql_pattern': s.sql_pattern,
+                'category': s.category.value,
+                'complexity': s.complexity.value,
+                'execution_count': s.execution_count,
+                'total_execution_time_ms': s.total_execution_time_ms,
+                'avg_execution_time_ms': s.avg_execution_time_ms,
+                'min_execution_time_ms': s.min_execution_time_ms,
+                'max_execution_time_ms': s.max_execution_time_ms,
+                'median_execution_time_ms': s.median_execution_time_ms,
+                'p95_execution_time_ms': s.p95_execution_time_ms,
+                'p99_execution_time_ms': s.p99_execution_time_ms,
+                'total_rows_affected': s.total_rows_affected,
+                'frequent_tables': s.frequent_tables,
+                'first_executed': s.first_executed.isoformat() if s.first_executed else None,
+                'last_executed': s.last_executed.isoformat() if s.last_executed else None
+            }
+            for s in stats
+        ]
+
+    def analyze_query_performance(self, query: str) -> Dict[str, Any]:
+        """Analyze performance characteristics of a specific query.
+
+        Args:
+            query: SQL query to analyze
+
+        Returns:
+            Dictionary with query analysis results
+        """
+        if not self.enable_query_analysis or not self.query_analyzer:
+            return {'message': 'Query analysis is not enabled'}
+
+        # Normalize query and get hash
+        normalized_sql = self.query_analyzer._normalize_query(query)
+        query_hash = self.query_analyzer._hash_query(normalized_sql)
+
+        # Get existing statistics for this query
+        stats = self.query_analyzer.get_query_statistics(query_hash=query_hash)
+
+        if not stats:
+            # No historical data, provide basic analysis
+            category = self.query_analyzer._categorize_query(query)
+            complexity = self.query_analyzer._assess_complexity(query)
+            tables = self.query_analyzer._extract_table_names(query)
+
+            return {
+                'query_hash': query_hash,
+                'category': category.value,
+                'complexity': complexity.value,
+                'tables': tables,
+                'historical_data': False,
+                'recommendations': [
+                    "Execute this query to collect performance data",
+                    "Monitor execution patterns over time"
+                ]
+            }
+
+        # Return detailed analysis with historical data
+        stat = stats[0]
+        suggestions = self.query_analyzer.generate_optimization_suggestions(query_hash)
+
+        return {
+            'query_hash': query_hash,
+            'category': stat['category'],
+            'complexity': stat['complexity'],
+            'tables': stat['frequent_tables'],
+            'historical_data': True,
+            'performance_metrics': {
+                'execution_count': stat['execution_count'],
+                'avg_execution_time_ms': stat['avg_execution_time_ms'],
+                'min_execution_time_ms': stat['min_execution_time_ms'],
+                'max_execution_time_ms': stat['max_execution_time_ms'],
+                'total_rows_affected': stat['total_rows_affected']
+            },
+            'optimization_suggestions': [
+                {
+                    'type': s.suggestion_type,
+                    'description': s.description,
+                    'impact': s.potential_impact,
+                    'effort': s.implementation_effort,
+                    'recommendations': s.details.get('recommendations', [])
+                }
+                for s in suggestions if s.query_hash == query_hash
+            ]
+        }
+
+    def clear_query_analysis_data(self, older_than_hours: Optional[int] = None):
+        """Clear query analysis data.
+
+        Args:
+            older_than_hours: Clear data older than this many hours, or None to clear all
+        """
+        if self.enable_query_analysis and self.query_analyzer:
+            self.query_analyzer.clear_history(older_than_hours)
+            logger.info(f"Query analysis data cleared (older than {older_than_hours} hours)" if older_than_hours else "All query analysis data cleared")
