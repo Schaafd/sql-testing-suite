@@ -571,15 +571,223 @@ class BusinessRuleEngine:
             schema_name=schema_name,
             table_name=table_name
         )
-        
+
         # Create temporary rule set
         rule_set = RuleSet(
             name=f"{table_name}_validation",
             description=f"Validation rules for table {table_name}",
             rules=rules
         )
-        
+
         return self.execute_rule_set(rule_set, context)
+
+    def _create_rule_batches(self, rules: List[BusinessRule]) -> List[RuleBatch]:
+        """Create optimized batches of rules for parallel execution."""
+        if not self.enable_batching:
+            return [RuleBatch([rule]) for rule in rules]
+
+        batches = []
+        remaining_rules = list(rules)
+
+        while remaining_rules:
+            # Start a new batch with the first remaining rule
+            current_batch = RuleBatch([remaining_rules.pop(0)])
+
+            # Try to add compatible rules to the batch
+            i = 0
+            while i < len(remaining_rules) and current_batch.size < self.max_batch_size:
+                rule = remaining_rules[i]
+
+                # Check if rule can be added to current batch
+                if self._can_batch_rule(current_batch.rules[0], rule):
+                    current_batch.rules.append(remaining_rules.pop(i))
+                    current_batch.size += 1
+                else:
+                    i += 1
+
+            batches.append(current_batch)
+
+        logger.info(f"Created {len(batches)} rule batches from {len(rules)} rules")
+        return batches
+
+    def _can_batch_rule(self, base_rule: BusinessRule, candidate_rule: BusinessRule) -> bool:
+        """Check if two rules can be batched together."""
+        # Rules can be batched if they:
+        # 1. Have no dependencies on each other
+        # 2. Target the same database/schema
+        # 3. Are both SQL-based or both custom function based
+        # 4. Have similar execution characteristics
+
+        if candidate_rule.name in base_rule.dependencies or base_rule.name in candidate_rule.dependencies:
+            return False
+
+        if base_rule.rule_type != candidate_rule.rule_type:
+            return False
+
+        # Check if they're both marked as batch-compatible
+        if not getattr(base_rule, 'batch_compatible', True) or not getattr(candidate_rule, 'batch_compatible', True):
+            return False
+
+        return True
+
+    def _execute_rules_batched_parallel(
+        self,
+        rules: List[BusinessRule],
+        context: ValidationContext,
+        max_concurrent: int,
+        fail_fast: bool
+    ) -> List[RuleResult]:
+        """Execute rules in optimized batches with parallel processing."""
+        all_results = []
+        executed_rules = set()
+
+        # Create rule batches
+        batches = self._create_rule_batches(rules)
+        pending_batches = {batch.batch_id: batch for batch in batches}
+
+        with ThreadPoolExecutor(max_workers=min(max_concurrent, len(batches))) as executor:
+            futures = {}
+
+            while pending_batches or futures:
+                # Submit batches whose dependencies are satisfied
+                ready_batches = [
+                    batch for batch in pending_batches.values()
+                    if all(self._dependencies_satisfied(rule, executed_rules) for rule in batch.rules)
+                ]
+
+                for batch in ready_batches:
+                    if len(futures) < max_concurrent:
+                        future = executor.submit(self._execute_rule_batch, batch, context)
+                        futures[future] = batch
+                        del pending_batches[batch.batch_id]
+                    else:
+                        break
+
+                # Process completed futures
+                if futures:
+                    completed = as_completed(futures, timeout=1.0)
+                    try:
+                        for future in completed:
+                            batch = futures[future]
+                            try:
+                                batch_results = future.result()
+                                all_results.extend(batch_results)
+
+                                # Mark all rules in batch as executed
+                                for rule in batch.rules:
+                                    executed_rules.add(rule.name)
+
+                                # Check fail-fast condition
+                                if fail_fast:
+                                    for result in batch_results:
+                                        if not result.passed and result.severity in [RuleSeverity.CRITICAL, RuleSeverity.ERROR]:
+                                            logger.warning(f"Stopping batch execution due to fail-fast and critical/error failure")
+                                            # Cancel remaining futures
+                                            for f in futures:
+                                                if f != future:
+                                                    f.cancel()
+                                            return all_results
+
+                            except Exception as e:
+                                logger.error(f"Batch execution failed: {str(e)}")
+                                # Create error results for all rules in the batch
+                                for rule in batch.rules:
+                                    error_result = RuleResult(
+                                        rule_name=rule.name,
+                                        rule_type=rule.rule_type,
+                                        status=RuleStatus.ERROR,
+                                        severity=rule.severity,
+                                        scope=rule.scope,
+                                        passed=False,
+                                        message=f"Batch execution failed: {str(e)}"
+                                    )
+                                    all_results.append(error_result)
+                                    executed_rules.add(rule.name)
+
+                            del futures[future]
+                    except Exception:
+                        # Timeout or other exception - continue with next iteration
+                        pass
+
+        # Mark remaining rules as skipped
+        for batch in pending_batches.values():
+            for rule in batch.rules:
+                all_results.append(RuleResult(
+                    rule_name=rule.name,
+                    rule_type=rule.rule_type,
+                    status=RuleStatus.SKIPPED,
+                    severity=rule.severity,
+                    scope=rule.scope,
+                    passed=False,
+                    message="Rule skipped due to unsatisfied dependencies"
+                ))
+
+        return all_results
+
+    def _execute_rule_batch(self, batch: RuleBatch, context: ValidationContext) -> List[RuleResult]:
+        """Execute a batch of rules."""
+        results = []
+
+        logger.debug(f"Executing batch {batch.batch_id} with {batch.size} rules")
+
+        if self.metrics:
+            self.metrics.increment_counter('batches_executed')
+            self.metrics.record_value('batch_size', batch.size)
+
+        # For now, execute rules in batch sequentially
+        # TODO: Implement true batch SQL execution for compatible rules
+        for rule in batch.rules:
+            try:
+                result = self.retry_manager.execute_with_retry(
+                    self.execute_rule, rule, context, use_cache=True
+                )
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Failed to execute rule {rule.name} in batch: {e}")
+                error_result = RuleResult(
+                    rule_name=rule.name,
+                    rule_type=rule.rule_type,
+                    status=RuleStatus.ERROR,
+                    severity=rule.severity,
+                    scope=rule.scope,
+                    passed=False,
+                    message=f"Rule execution failed: {str(e)}"
+                )
+                results.append(error_result)
+
+        return results
+
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get comprehensive performance statistics."""
+        stats = {}
+
+        if self.metrics:
+            stats['execution_metrics'] = self.metrics.get_all_stats()
+
+        if self.cache_manager:
+            stats['cache_stats'] = self.cache_manager.get_cache_stats()
+
+        stats['engine_config'] = {
+            'max_workers': self.max_workers,
+            'enable_batching': self.enable_batching,
+            'max_batch_size': self.max_batch_size,
+            'cache_enabled': self.cache_manager is not None,
+            'metrics_enabled': self.metrics is not None
+        }
+
+        return stats
+
+    def invalidate_cache(self, pattern: str = None):
+        """Invalidate cached results."""
+        if self.cache_manager:
+            self.cache_manager.invalidate(pattern)
+            logger.info(f"Cache invalidated{f' (pattern: {pattern})' if pattern else ''}")
+
+    def reset_metrics(self):
+        """Reset performance metrics."""
+        if self.metrics:
+            self.metrics = PerformanceMetrics()
+            logger.info("Performance metrics reset")
     
     def validate_query(
         self,

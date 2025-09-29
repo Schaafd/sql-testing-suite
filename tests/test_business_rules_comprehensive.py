@@ -585,5 +585,329 @@ def test_create_sample_business_rules():
         assert rule.severity is not None
 
 
+class TestAdvancedBusinessRuleFeatures:
+    """Test advanced features like caching, metrics, retry, and batching."""
+
+    @pytest.fixture
+    def mock_connection_manager(self):
+        """Mock connection manager for testing."""
+        manager = Mock(spec=ConnectionManager)
+        adapter = Mock()
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame())
+        manager.get_adapter.return_value = adapter
+        return manager
+
+    @pytest.fixture
+    def advanced_rule_engine(self, mock_connection_manager):
+        """Create an advanced rule engine with all features enabled."""
+        return BusinessRuleEngine(
+            mock_connection_manager,
+            max_workers=4,
+            enable_caching=True,
+            enable_metrics=True,
+            cache_config={'l1_max_size': 100, 'l1_ttl_seconds': 60},
+            retry_config={'max_retries': 2, 'base_delay': 0.1}
+        )
+
+    @pytest.fixture
+    def sample_rules(self):
+        """Create sample rules for testing."""
+        return [
+            BusinessRule(
+                name="rule_1",
+                rule_type=RuleType.DATA_QUALITY,
+                severity=RuleSeverity.ERROR,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT COUNT(*) as violation_count FROM users WHERE email IS NULL",
+                description="Check for null emails",
+                enabled=True,
+                timeout_seconds=30.0
+            ),
+            BusinessRule(
+                name="rule_2",
+                rule_type=RuleType.DATA_QUALITY,
+                severity=RuleSeverity.WARNING,
+                scope=ValidationScope.COLUMN,
+                sql_query="SELECT COUNT(*) as violation_count FROM users WHERE age < 0",
+                description="Check for negative ages",
+                enabled=True,
+                timeout_seconds=30.0
+            ),
+            BusinessRule(
+                name="rule_3",
+                rule_type=RuleType.DATA_QUALITY,
+                severity=RuleSeverity.INFO,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT COUNT(*) as violation_count FROM users WHERE created_at > NOW()",
+                description="Check for future dates",
+                enabled=True,
+                timeout_seconds=30.0,
+                dependencies=["rule_1"]  # Depends on rule_1
+            )
+        ]
+
+    def test_performance_metrics_collection(self, advanced_rule_engine, sample_rules):
+        """Test performance metrics collection."""
+        engine = advanced_rule_engine
+
+        # Execute some rules
+        context = ValidationContext(database_name="test_db")
+        rule_set = RuleSet(name="test_set", rules=sample_rules)
+
+        # Mock adapter to simulate execution
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame({'violation_count': [0]}))
+
+        # Execute rule set
+        summary = engine.execute_rule_set(rule_set, context)
+
+        # Check metrics were collected
+        assert engine.metrics is not None
+        stats = engine.get_performance_stats()
+
+        assert 'execution_metrics' in stats
+        assert 'engine_config' in stats
+        assert stats['engine_config']['metrics_enabled'] is True
+        assert stats['engine_config']['cache_enabled'] is True
+
+    def test_caching_functionality(self, advanced_rule_engine, sample_rules):
+        """Test result caching functionality."""
+        engine = advanced_rule_engine
+        rule = sample_rules[0]
+        context = ValidationContext(database_name="test_db")
+
+        # Mock adapter
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame({'violation_count': [0]}))
+
+        # Execute rule first time
+        result1 = engine.execute_rule(rule, context)
+
+        # Execute rule second time (should use cache)
+        result2 = engine.execute_rule(rule, context)
+
+        # Both should succeed
+        assert result1.passed
+        assert result2.passed
+
+        # Check cache stats
+        stats = engine.get_performance_stats()
+        assert 'cache_stats' in stats
+
+        # Invalidate cache
+        engine.invalidate_cache()
+        cache_stats = stats['cache_stats']
+        assert 'l1_size' in cache_stats
+
+    def test_retry_mechanism(self, advanced_rule_engine, sample_rules):
+        """Test retry mechanism with exponential backoff."""
+        engine = advanced_rule_engine
+        rule = sample_rules[0]
+        context = ValidationContext(database_name="test_db")
+
+        # Mock adapter to fail first few times, then succeed
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.side_effect = [
+            Exception("Connection failed"),
+            Exception("Temporary error"),
+            Mock(data=pd.DataFrame({'violation_count': [0]}))  # Third call succeeds
+        ]
+
+        # Execute rule - should succeed after retries
+        result = engine.execute_rule(rule, context)
+
+        # Should succeed after retries
+        assert result.passed
+
+        # Verify retry logic was called
+        assert adapter.execute_query.call_count == 3
+
+    def test_rule_batching(self, advanced_rule_engine, sample_rules):
+        """Test rule batching functionality."""
+        engine = advanced_rule_engine
+
+        # Remove dependencies to allow batching
+        for rule in sample_rules:
+            rule.dependencies = []
+
+        # Create batches
+        batches = engine._create_rule_batches(sample_rules)
+
+        # Should create appropriate number of batches
+        assert len(batches) > 0
+
+        # Test batch compatibility
+        rule1, rule2 = sample_rules[0], sample_rules[1]
+        assert engine._can_batch_rule(rule1, rule2) is True
+
+        # Test with dependency - should not be batchable
+        rule2.dependencies = [rule1.name]
+        assert engine._can_batch_rule(rule1, rule2) is False
+
+    def test_parallel_batched_execution(self, advanced_rule_engine, sample_rules):
+        """Test parallel execution with batching."""
+        engine = advanced_rule_engine
+        context = ValidationContext(database_name="test_db")
+
+        # Remove dependencies for parallel execution
+        for rule in sample_rules:
+            rule.dependencies = []
+
+        rule_set = RuleSet(
+            name="parallel_test",
+            rules=sample_rules,
+            parallel_execution=True,
+            max_concurrent_rules=2
+        )
+
+        # Mock adapter
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame({'violation_count': [0]}))
+
+        # Execute with batching enabled
+        summary = engine.execute_rule_set(rule_set, context, enable_batching=True)
+
+        # Should complete successfully
+        assert summary.rules_executed == len(sample_rules)
+        assert summary.rules_passed == len(sample_rules)
+
+    def test_fail_fast_with_batching(self, advanced_rule_engine, sample_rules):
+        """Test fail-fast behavior with batch execution."""
+        engine = advanced_rule_engine
+        context = ValidationContext(database_name="test_db")
+
+        # Set first rule to critical severity
+        sample_rules[0].severity = RuleSeverity.CRITICAL
+
+        # Remove dependencies
+        for rule in sample_rules:
+            rule.dependencies = []
+
+        rule_set = RuleSet(
+            name="fail_fast_test",
+            rules=sample_rules,
+            parallel_execution=True,
+            max_concurrent_rules=2
+        )
+
+        # Mock adapter - first rule fails
+        adapter = engine.connection_manager.get_adapter.return_value
+        side_effects = [
+            Mock(data=pd.DataFrame({'violation_count': [5]})),  # First rule fails
+            Mock(data=pd.DataFrame({'violation_count': [0]})),  # Second rule would pass
+            Mock(data=pd.DataFrame({'violation_count': [0]}))   # Third rule would pass
+        ]
+        adapter.execute_query.side_effect = side_effects
+
+        # Execute with fail-fast
+        summary = engine.execute_rule_set(rule_set, context, fail_fast=True)
+
+        # Should have failed rules due to violations
+        assert summary.rules_failed > 0
+
+    def test_cache_invalidation(self, advanced_rule_engine, sample_rules):
+        """Test cache invalidation patterns."""
+        engine = advanced_rule_engine
+        rule = sample_rules[0]
+        context = ValidationContext(database_name="test_db")
+
+        # Mock adapter
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame({'violation_count': [0]}))
+
+        # Execute rule to populate cache
+        result1 = engine.execute_rule(rule, context)
+        assert result1.passed
+
+        # Invalidate specific pattern
+        engine.invalidate_cache("test_rule")
+
+        # Invalidate all cache
+        engine.invalidate_cache()
+
+        # Should still work after cache invalidation
+        result2 = engine.execute_rule(rule, context)
+        assert result2.passed
+
+    def test_engine_configuration_options(self, mock_connection_manager):
+        """Test various engine configuration options."""
+        # Test with caching disabled
+        engine_no_cache = BusinessRuleEngine(
+            mock_connection_manager,
+            enable_caching=False,
+            enable_metrics=False
+        )
+
+        assert engine_no_cache.cache_manager is None
+        assert engine_no_cache.metrics is None
+
+        # Test with custom retry configuration
+        engine_custom_retry = BusinessRuleEngine(
+            mock_connection_manager,
+            retry_config={'max_retries': 5, 'base_delay': 0.5}
+        )
+
+        assert engine_custom_retry.retry_manager.max_retries == 5
+        assert engine_custom_retry.retry_manager.base_delay == 0.5
+
+    @pytest.mark.integration
+    def test_end_to_end_advanced_features(self, advanced_rule_engine, sample_rules):
+        """End-to-end test of all advanced features together."""
+        engine = advanced_rule_engine
+        context = ValidationContext(database_name="test_db", table_name="users")
+
+        # Create a complex rule set with dependencies
+        complex_rules = [
+            BusinessRule(
+                name="data_exists",
+                rule_type=RuleType.DATA_QUALITY,
+                severity=RuleSeverity.CRITICAL,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END as violation_count FROM users",
+                description="Ensure data exists",
+                enabled=True,
+                timeout_seconds=30.0
+            ),
+            BusinessRule(
+                name="email_validation",
+                rule_type=RuleType.DATA_QUALITY,
+                severity=RuleSeverity.ERROR,
+                scope=ValidationScope.COLUMN,
+                sql_query="SELECT COUNT(*) as violation_count FROM users WHERE email IS NULL OR email = ''",
+                description="Validate email fields",
+                enabled=True,
+                timeout_seconds=30.0,
+                dependencies=["data_exists"]
+            )
+        ]
+
+        rule_set = RuleSet(
+            name="complex_validation",
+            description="Complex validation with all features",
+            rules=complex_rules,
+            parallel_execution=True,
+            max_concurrent_rules=2
+        )
+
+        # Mock adapter responses
+        adapter = engine.connection_manager.get_adapter.return_value
+        adapter.execute_query.return_value = Mock(data=pd.DataFrame({'violation_count': [0]}))
+
+        # Execute the complex rule set
+        summary = engine.execute_rule_set(rule_set, context, enable_batching=True)
+
+        # Verify execution completed successfully
+        assert summary.total_rules == 2
+        assert summary.rules_executed == 2
+        assert summary.rules_passed == 2
+        assert summary.rules_failed == 0
+
+        # Verify performance stats are available
+        stats = engine.get_performance_stats()
+        assert 'execution_metrics' in stats
+        assert 'cache_stats' in stats
+        assert 'engine_config' in stats
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

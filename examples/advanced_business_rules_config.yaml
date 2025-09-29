@@ -1,0 +1,386 @@
+# Advanced Business Rules Configuration Example
+# Demonstrates enterprise-grade features including caching, parallel execution,
+# performance monitoring, and retry mechanisms
+
+# Database Configuration
+databases:
+  production:
+    type: postgresql
+    host: ${PROD_DB_HOST:-localhost}
+    port: ${PROD_DB_PORT:-5432}
+    database: ${PROD_DB_NAME:-ecommerce}
+    username: ${PROD_DB_USER:-app_user}
+    password: ${PROD_DB_PASSWORD}
+    options:
+      pool_size: 10
+      max_overflow: 20
+      pool_timeout: 30
+      pool_recycle: 3600
+
+  staging:
+    type: postgresql
+    host: ${STAGING_DB_HOST:-localhost}
+    port: ${STAGING_DB_PORT:-5432}
+    database: ${STAGING_DB_NAME:-ecommerce_staging}
+    username: ${STAGING_DB_USER:-app_user}
+    password: ${STAGING_DB_PASSWORD}
+
+default_database: production
+
+# Advanced Engine Configuration
+engine_config:
+  # Parallel execution settings
+  max_workers: 8
+  enable_batching: true
+  max_batch_size: 10
+
+  # Caching configuration
+  enable_caching: true
+  cache_config:
+    l1_max_size: 1000      # L1 cache max entries
+    l1_ttl_seconds: 300    # 5 minutes
+    l2_ttl_seconds: 3600   # 1 hour
+  redis_url: ${REDIS_URL:-redis://localhost:6379/0}
+
+  # Performance monitoring
+  enable_metrics: true
+
+  # Retry configuration
+  retry_config:
+    max_retries: 3
+    base_delay: 1.0
+    max_delay: 60.0
+    backoff_multiplier: 2.0
+
+# Business Rule Sets
+rule_sets:
+  data_quality_validation:
+    name: "Data Quality Validation"
+    description: "Comprehensive data quality checks for production database"
+    parallel_execution: true
+    max_concurrent_rules: 6
+    fail_fast: false
+
+    rules:
+      # Foundation rule - must execute first
+      - name: "table_exists_validation"
+        rule_type: "data_quality"
+        severity: "critical"
+        scope: "table"
+        description: "Verify that required tables exist and are accessible"
+        enabled: true
+        timeout_seconds: 30.0
+        batch_compatible: true
+        cache_results: true
+        cache_key_fields: ["database_name", "schema_name"]
+
+        sql_query: |
+          SELECT
+            CASE
+              WHEN COUNT(*) = 0 THEN 1
+              ELSE 0
+            END as violation_count,
+            'Missing required tables' as message
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name IN ('users', 'orders', 'products', 'payments')
+          HAVING COUNT(*) < 4
+
+      # User data validation rules
+      - name: "user_email_validation"
+        rule_type: "data_quality"
+        severity: "error"
+        scope: "column"
+        description: "Validate user email addresses are properly formatted and not null"
+        enabled: true
+        timeout_seconds: 60.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["table_exists_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Invalid or null email addresses found' as message,
+            'users' as table_name,
+            'email' as column_name
+          FROM users
+          WHERE email IS NULL
+             OR email = ''
+             OR email !~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+
+      - name: "user_age_validation"
+        rule_type: "data_quality"
+        severity: "warning"
+        scope: "column"
+        description: "Check for reasonable age values (0-120)"
+        enabled: true
+        timeout_seconds: 45.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["table_exists_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Age values outside reasonable range' as message,
+            'users' as table_name,
+            'age' as column_name,
+            array_agg(DISTINCT age) FILTER (WHERE age < 0 OR age > 120) as sample_values
+          FROM users
+          WHERE age < 0 OR age > 120
+
+      - name: "user_duplicate_check"
+        rule_type: "data_quality"
+        severity: "error"
+        scope: "table"
+        description: "Check for duplicate user records based on email"
+        enabled: true
+        timeout_seconds: 90.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["user_email_validation"]
+        max_violation_count: 10  # Allow up to 10 duplicates
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Duplicate users found' as message,
+            'users' as table_name,
+            array_agg(email) as sample_values
+          FROM (
+            SELECT email, COUNT(*) as cnt
+            FROM users
+            WHERE email IS NOT NULL
+            GROUP BY email
+            HAVING COUNT(*) > 1
+          ) duplicates
+
+      # Order data validation rules
+      - name: "order_amount_validation"
+        rule_type: "data_quality"
+        severity: "error"
+        scope: "column"
+        description: "Validate order amounts are positive and reasonable"
+        enabled: true
+        timeout_seconds: 60.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["table_exists_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Invalid order amounts found' as message,
+            'orders' as table_name,
+            'amount' as column_name,
+            array_agg(DISTINCT amount) FILTER (WHERE amount <= 0 OR amount > 10000) as sample_values
+          FROM orders
+          WHERE amount <= 0 OR amount > 10000
+
+      - name: "order_status_validation"
+        rule_type: "data_quality"
+        severity: "warning"
+        scope: "column"
+        description: "Check for valid order status values"
+        enabled: true
+        timeout_seconds: 30.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["table_exists_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Invalid order status values found' as message,
+            'orders' as table_name,
+            'status' as column_name,
+            array_agg(DISTINCT status) as sample_values
+          FROM orders
+          WHERE status NOT IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded')
+
+      - name: "order_user_reference_integrity"
+        rule_type: "data_quality"
+        severity: "critical"
+        scope: "table"
+        description: "Verify referential integrity between orders and users"
+        enabled: true
+        timeout_seconds: 120.0
+        batch_compatible: false  # Requires complex join
+        cache_results: true
+        dependencies: ["user_email_validation", "order_amount_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Orders with invalid user references found' as message,
+            'orders' as table_name,
+            array_agg(DISTINCT o.user_id) as sample_values
+          FROM orders o
+          LEFT JOIN users u ON o.user_id = u.id
+          WHERE u.id IS NULL
+
+      # Product data validation rules
+      - name: "product_price_validation"
+        rule_type: "data_quality"
+        severity: "error"
+        scope: "column"
+        description: "Validate product prices are positive"
+        enabled: true
+        timeout_seconds: 45.0
+        batch_compatible: true
+        cache_results: true
+        dependencies: ["table_exists_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Invalid product prices found' as message,
+            'products' as table_name,
+            'price' as column_name,
+            array_agg(DISTINCT price) FILTER (WHERE price <= 0) as sample_values
+          FROM products
+          WHERE price <= 0
+
+      # Cross-table business logic validation
+      - name: "order_product_consistency"
+        rule_type: "business_logic"
+        severity: "error"
+        scope: "database"
+        description: "Verify order line items reference valid products"
+        enabled: true
+        timeout_seconds: 180.0
+        batch_compatible: false  # Complex cross-table validation
+        cache_results: false      # Results change frequently
+        dependencies: ["order_amount_validation", "product_price_validation"]
+
+        sql_query: |
+          SELECT
+            COUNT(*) as violation_count,
+            'Order items with invalid product references' as message,
+            'order_items' as table_name,
+            array_agg(DISTINCT oi.product_id) as sample_values
+          FROM order_items oi
+          LEFT JOIN products p ON oi.product_id = p.id
+          WHERE p.id IS NULL
+
+      # Data freshness validation
+      - name: "data_freshness_check"
+        rule_type: "data_quality"
+        severity: "warning"
+        scope: "table"
+        description: "Check that data is being updated regularly"
+        enabled: true
+        timeout_seconds: 30.0
+        batch_compatible: true
+        cache_results: false  # Time-dependent, don't cache
+        dependencies: []  # Independent check
+        expected_violation_count: 0
+
+        sql_query: |
+          SELECT
+            CASE
+              WHEN MAX(updated_at) < NOW() - INTERVAL '24 hours' THEN 1
+              ELSE 0
+            END as violation_count,
+            'Data not updated in last 24 hours' as message,
+            'users' as table_name
+          FROM users
+
+  performance_validation:
+    name: "Performance Validation"
+    description: "Database performance and efficiency checks"
+    parallel_execution: true
+    max_concurrent_rules: 4
+    fail_fast: false
+
+    rules:
+      - name: "query_performance_check"
+        rule_type: "performance"
+        severity: "warning"
+        scope: "database"
+        description: "Monitor slow query patterns"
+        enabled: true
+        timeout_seconds: 60.0
+        batch_compatible: false
+        cache_results: false
+
+        sql_query: |
+          SELECT
+            CASE
+              WHEN COUNT(*) > 100 THEN 1
+              ELSE 0
+            END as violation_count,
+            'Too many slow queries detected' as message
+          FROM pg_stat_statements
+          WHERE mean_time > 1000  -- Queries taking more than 1 second
+
+      - name: "table_size_monitoring"
+        rule_type: "performance"
+        severity: "info"
+        scope: "database"
+        description: "Monitor table growth patterns"
+        enabled: true
+        timeout_seconds: 45.0
+        batch_compatible: true
+        cache_results: true
+
+        sql_query: |
+          SELECT
+            CASE
+              WHEN MAX(pg_total_relation_size(schemaname||'.'||tablename)) > 10737418240 THEN 1  -- 10GB
+              ELSE 0
+            END as violation_count,
+            'Large tables detected' as message,
+            string_agg(tablename, ', ') as sample_values
+          FROM pg_tables
+          WHERE schemaname = 'public'
+          GROUP BY schemaname
+          HAVING MAX(pg_total_relation_size(schemaname||'.'||tablename)) > 10737418240
+
+# Validation Settings
+validation_settings:
+  fail_fast: false
+  parallel_execution: true
+  max_workers: 8
+  report_format: "json"
+  output_dir: "./reports"
+
+  # Performance thresholds
+  performance_thresholds:
+    max_execution_time_ms: 5000
+    max_memory_usage_mb: 512
+    min_cache_hit_rate: 0.7
+    max_error_rate: 0.05
+
+# Notification Settings (for future integration)
+notifications:
+  enabled: false
+  channels:
+    - type: "slack"
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      channel: "#data-quality"
+    - type: "email"
+      smtp_host: "${SMTP_HOST}"
+      recipients: ["data-team@company.com"]
+
+# Monitoring and Alerting
+monitoring:
+  enabled: true
+  metrics_retention_days: 30
+
+  alerts:
+    - name: "high_error_rate"
+      condition: "error_rate > 0.1"
+      severity: "critical"
+      cooldown_minutes: 15
+
+    - name: "low_cache_performance"
+      condition: "cache_hit_rate < 0.5"
+      severity: "warning"
+      cooldown_minutes: 30
+
+    - name: "slow_execution"
+      condition: "avg_execution_time > 2000"
+      severity: "warning"
+      cooldown_minutes: 10

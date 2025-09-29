@@ -441,3 +441,158 @@ class TestExecutor:
         """Clear execution state for fresh test runs."""
         self._executed_tests.clear()
         self.fixture_manager.clear_cache()
+        if self.metrics:
+            self.metrics = TestMetricsCollector()
+
+    async def execute_test_suite_with_isolation(self,
+                                              test_suite: TestSuite,
+                                              database_name: str = None,
+                                              parallel: bool = False,
+                                              fail_fast: bool = False) -> TestSuiteResult:
+        """Execute test suite with advanced isolation and parallel execution."""
+        suite_result = TestSuiteResult(
+            suite_name=test_suite.name,
+            start_time=datetime.now()
+        )
+
+        db_name = database_name or 'default'
+
+        try:
+            # Run suite setup
+            if test_suite.setup_sql:
+                setup_result = await self.connection_manager.get_adapter(db_name).execute_query(
+                    test_suite.setup_sql
+                )
+                if not setup_result.success:
+                    raise Exception(f"Suite setup failed: {setup_result.error}")
+
+            # Get enabled tests
+            tests_to_run = test_suite.get_enabled_tests()
+
+            if parallel:
+                # Execute tests in parallel with controlled concurrency
+                results = await self._execute_tests_parallel_isolated(
+                    tests_to_run, db_name, fail_fast
+                )
+            else:
+                # Execute tests sequentially with isolation
+                results = await self._execute_tests_sequential_isolated(
+                    tests_to_run, db_name, fail_fast
+                )
+
+            suite_result.test_results.extend(results)
+
+            # Run suite teardown
+            if test_suite.teardown_sql:
+                teardown_result = await self.connection_manager.get_adapter(db_name).execute_query(
+                    test_suite.teardown_sql
+                )
+                if not teardown_result.success:
+                    logger.warning(f"Suite teardown failed: {teardown_result.error}")
+
+        except Exception as e:
+            logger.error(f"Test suite execution failed: {e}")
+            # Mark remaining tests as error
+            for test in test_suite.get_enabled_tests():
+                if not any(r.test_name == test.name for r in suite_result.test_results):
+                    error_result = TestResult(
+                        test_name=test.name,
+                        status=TestStatus.ERROR,
+                        start_time=datetime.now(),
+                        end_time=datetime.now(),
+                        error_message=f"Suite execution failed: {str(e)}"
+                    )
+                    suite_result.test_results.append(error_result)
+
+        finally:
+            suite_result.end_time = datetime.now()
+
+        return suite_result
+
+    async def _execute_tests_parallel_isolated(self,
+                                             tests: List[SQLTest],
+                                             database_name: str,
+                                             fail_fast: bool = False) -> List[TestResult]:
+        """Execute tests in parallel with proper isolation."""
+        # Separate independent tests from dependent ones
+        independent_tests = [test for test in tests if not test.depends_on]
+        dependent_tests = [test for test in tests if test.depends_on]
+
+        results = []
+
+        # Execute independent tests in parallel
+        if independent_tests:
+            semaphore = asyncio.Semaphore(self.max_workers)
+
+            async def run_with_semaphore(test: SQLTest):
+                async with semaphore:
+                    return await self.execute_test(test, database_name)
+
+            tasks = [run_with_semaphore(test) for test in independent_tests]
+            parallel_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for i, result in enumerate(parallel_results):
+                if isinstance(result, Exception):
+                    error_result = TestResult(
+                        test_name=independent_tests[i].name,
+                        status=TestStatus.ERROR,
+                        start_time=datetime.now(),
+                        end_time=datetime.now(),
+                        error_message=str(result)
+                    )
+                    results.append(error_result)
+                else:
+                    results.append(result)
+
+                    # Check fail-fast condition
+                    if fail_fast and result.status in [TestStatus.ERROR, TestStatus.FAILED]:
+                        logger.warning(f"Stopping execution due to fail-fast mode: {result.test_name}")
+                        return results
+
+        # Execute dependent tests sequentially
+        if dependent_tests and not (fail_fast and any(r.status in [TestStatus.ERROR, TestStatus.FAILED] for r in results)):
+            sequential_results = await self._execute_tests_sequential_isolated(
+                dependent_tests, database_name, fail_fast
+            )
+            results.extend(sequential_results)
+
+        return results
+
+    async def _execute_tests_sequential_isolated(self,
+                                                tests: List[SQLTest],
+                                                database_name: str,
+                                                fail_fast: bool = False) -> List[TestResult]:
+        """Execute tests sequentially with proper dependency ordering."""
+        ordered_tests = self._sort_tests_by_dependencies(tests)
+        results = []
+
+        for test in ordered_tests:
+            result = await self.execute_test(test, database_name)
+            results.append(result)
+
+            # Check fail-fast condition
+            if fail_fast and result.status in [TestStatus.ERROR, TestStatus.FAILED]:
+                logger.warning(f"Stopping execution due to fail-fast mode: {result.test_name}")
+                break
+
+        return results
+
+    def get_execution_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive execution metrics."""
+        if not self.metrics:
+            return {"metrics_enabled": False}
+
+        stats = self.metrics.get_summary_stats()
+        stats.update({
+            "metrics_enabled": True,
+            "active_contexts": len(self._active_contexts),
+            "executed_tests": len(self._executed_tests),
+            "max_workers": self.max_workers,
+            "default_isolation_level": self.default_isolation_level.value
+        })
+
+        return stats
+
+
+# Maintain backward compatibility
+TestExecutor = EnterpriseTestExecutor
