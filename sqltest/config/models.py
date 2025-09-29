@@ -19,18 +19,50 @@ class DatabaseType(str, Enum):
 
 
 class ConnectionPoolConfig(BaseModel):
-    """Connection pool configuration."""
-    min_connections: int = Field(default=1, ge=0, le=100)
-    max_connections: int = Field(default=10, ge=1, le=1000)
-    timeout: int = Field(default=30, ge=1, le=3600)
-    retry_attempts: int = Field(default=3, ge=0, le=10)
-    retry_delay: float = Field(default=1.0, ge=0.1, le=60.0)
+    """Advanced connection pool configuration for enterprise workloads."""
+    # Basic pool settings
+    min_connections: int = Field(default=2, ge=0, le=100, description="Minimum number of connections to maintain")
+    max_connections: int = Field(default=20, ge=1, le=1000, description="Maximum number of connections allowed")
+    timeout: int = Field(default=30, ge=1, le=3600, description="Connection timeout in seconds")
+    retry_attempts: int = Field(default=3, ge=0, le=10, description="Number of retry attempts on connection failure")
+    retry_delay: float = Field(default=1.0, ge=0.1, le=60.0, description="Delay between retry attempts in seconds")
+
+    # Advanced pooling options
+    pool_recycle: int = Field(default=3600, ge=300, le=86400, description="Connection recycle time in seconds")
+    pool_pre_ping: bool = Field(default=True, description="Validate connections before use")
+    max_overflow: int = Field(default=10, ge=0, le=100, description="Number of connections to allow beyond max_connections")
+    invalidate_pool_on_disconnect: bool = Field(default=True, description="Invalidate pool on database disconnect")
+
+    # Health monitoring
+    health_check_interval: int = Field(default=60, ge=10, le=600, description="Health check interval in seconds")
+    max_connection_age: int = Field(default=7200, ge=600, le=86400, description="Maximum connection age in seconds")
+    connection_probe_query: str = Field(default="SELECT 1", description="Query to test connection health")
+
+    # Performance tuning
+    pool_size_growth_factor: float = Field(default=1.5, ge=1.1, le=3.0, description="Factor to grow pool size under load")
+    connection_acquisition_timeout: int = Field(default=10, ge=1, le=60, description="Timeout for acquiring connection from pool")
+    enable_connection_events: bool = Field(default=True, description="Enable connection lifecycle event logging")
+
+    # Connection lifecycle
+    pool_reset_on_return: bool = Field(default=True, description="Reset connection state when returned to pool")
+    enable_pool_statistics: bool = Field(default=True, description="Collect pool usage statistics")
+    connection_warmup_query: Optional[str] = Field(default=None, description="Query to warm up new connections")
 
     @model_validator(mode='after')
     def validate_connection_limits(self):
-        """Ensure min_connections <= max_connections."""
+        """Ensure min_connections <= max_connections and validate other constraints."""
         if self.min_connections > self.max_connections:
             raise ValueError("min_connections must be <= max_connections")
+
+        if self.max_overflow > self.max_connections:
+            raise ValueError("max_overflow should not exceed max_connections")
+
+        if self.health_check_interval > self.max_connection_age:
+            raise ValueError("health_check_interval should be less than max_connection_age")
+
+        if self.connection_acquisition_timeout >= self.timeout:
+            raise ValueError("connection_acquisition_timeout should be less than timeout")
+
         return self
 
 
