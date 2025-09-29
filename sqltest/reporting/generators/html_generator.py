@@ -13,6 +13,7 @@ from ..base import BaseReportGenerator, TemplateNotFoundError, OutputGenerationE
 from ..models import (
     ReportData, ReportFormat, ReportGenerationResult, Finding, ReportSection, ChartData
 )
+from ..interactive import InteractiveReportBuilder, TrendAnalyzer
 
 
 class HTMLReportGenerator(BaseReportGenerator):
@@ -588,3 +589,160 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
         '''
+
+    def generate_interactive_dashboard(self, report_data: ReportData) -> ReportGenerationResult:
+        """Generate an interactive dashboard-style HTML report.
+
+        Args:
+            report_data: The data to include in the report
+
+        Returns:
+            Result of the report generation process
+        """
+        start_time = time.time()
+
+        try:
+            # Validate input data
+            self.validate_data(report_data)
+
+            # Set up Jinja environment if not already done
+            if not self.jinja_env:
+                self._setup_jinja_environment()
+
+            # Generate executive summary and trend analysis
+            executive_summary = TrendAnalyzer.generate_executive_summary(report_data)
+
+            # Create interactive widgets
+            widgets = TrendAnalyzer.create_dashboard_widgets(report_data)
+
+            # Create interactive report builder
+            builder = InteractiveReportBuilder()
+
+            # Add filters based on data
+            filters = self._generate_filters_from_data(report_data)
+
+            # Determine output path
+            output_path = self._determine_output_path(report_data)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Generate interactive HTML content
+            html_content = self._generate_interactive_html_content(
+                report_data, executive_summary, widgets, filters, builder
+            )
+
+            # Write HTML file
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+
+            # Copy static assets
+            self._copy_static_assets(output_path.parent)
+
+            # Update execution metrics
+            self._update_execution_metrics(report_data, start_time)
+
+            return ReportGenerationResult(
+                success=True,
+                output_path=output_path,
+                format=self.supported_format,
+                file_size=self._calculate_file_size(output_path),
+                generation_time=time.time() - start_time
+            )
+
+        except Exception as e:
+            return ReportGenerationResult(
+                success=False,
+                error_message=str(e),
+                generation_time=time.time() - start_time
+            )
+
+    def _generate_interactive_html_content(self, report_data: ReportData,
+                                         executive_summary: Dict[str, Any],
+                                         widgets: List[Any],
+                                         filters: List[Any],
+                                         builder: InteractiveReportBuilder) -> str:
+        """Generate interactive HTML content.
+
+        Args:
+            report_data: The report data
+            executive_summary: Executive summary data
+            widgets: List of interactive widgets
+            filters: List of filter configurations
+            builder: Interactive report builder
+
+        Returns:
+            Generated HTML content
+        """
+        # Try to load interactive dashboard template
+        try:
+            template = self._load_template("interactive_dashboard.html")
+        except TemplateNotFoundError:
+            # Fallback to default template
+            template = self._load_template("default_report.html")
+
+        # Prepare context with interactive features
+        context = self._prepare_template_context(report_data)
+        context.update({
+            'executive_summary': executive_summary,
+            'widgets': widgets,
+            'filters': filters,
+            'interactive_js': builder.generate_javascript(),
+            'interactive_css': builder.generate_css()
+        })
+
+        return template.render(**context)
+
+    def _generate_filters_from_data(self, report_data: ReportData) -> List[Dict[str, Any]]:
+        """Generate filter configurations from report data.
+
+        Args:
+            report_data: The report data
+
+        Returns:
+            List of filter configurations
+        """
+        filters = []
+
+        # Analyze raw data to suggest filters
+        for dataset_name, df in report_data.raw_data.items():
+            if df.empty:
+                continue
+
+            # Add categorical column filters
+            categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+            for col in categorical_cols[:3]:  # Limit to first 3 categorical columns
+                unique_values = df[col].dropna().unique()
+                if 2 <= len(unique_values) <= 20:  # Reasonable number of options
+                    filters.append({
+                        'filter_id': f"{dataset_name}_{col}",
+                        'label': col.replace('_', ' ').title(),
+                        'filter_type': 'select',
+                        'column': col,
+                        'options': sorted(unique_values.tolist()),
+                        'default_value': None
+                    })
+
+            # Add date column filters
+            date_cols = df.select_dtypes(include=['datetime64']).columns
+            for col in date_cols[:2]:  # Limit to first 2 date columns
+                filters.append({
+                    'filter_id': f"{dataset_name}_{col}",
+                    'label': col.replace('_', ' ').title(),
+                    'filter_type': 'date',
+                    'column': col,
+                    'options': [],
+                    'default_value': None
+                })
+
+            # Add numeric range filters
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            for col in numeric_cols[:2]:  # Limit to first 2 numeric columns
+                filters.append({
+                    'filter_id': f"{dataset_name}_{col}",
+                    'label': col.replace('_', ' ').title(),
+                    'filter_type': 'range',
+                    'column': col,
+                    'options': [float(df[col].min()), float(df[col].max())],
+                    'default_value': None
+                })
+
+        return filters[:5]  # Limit total filters to prevent UI clutter

@@ -8,6 +8,8 @@ from .models import (
 )
 from .analyzer import ReportAnalyzer
 from .base import report_registry
+from .scheduler import ReportScheduler, ReportScheduleConfig, ScheduleFrequency, NotificationMethod
+from .interactive import InteractiveReportBuilder, TrendAnalyzer
 
 __all__ = [
     'ReportingEngine',
@@ -21,5 +23,11 @@ __all__ = [
     'SeverityLevel',
     'ReportGenerationResult',
     'ReportAnalyzer',
-    'report_registry'
+    'report_registry',
+    'ReportScheduler',
+    'ReportScheduleConfig',
+    'ScheduleFrequency',
+    'NotificationMethod',
+    'InteractiveReportBuilder',
+    'TrendAnalyzer'
 ]

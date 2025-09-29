@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Executive Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .metric-card {
+            text-align: center;
+            padding: 20px;
+            border: 1px solid #dee2e6;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .metric-card h3 {
+            font-size: 2.5rem;
+            color: #0d6efd;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .metric-card p {
+            color: #6c757d;
+            margin: 0;
+            font-weight: 500;
+        }
+
+        .finding-group {
+            border-left: 4px solid;
+            padding-left: 20px;
+            margin-bottom: 20px;
+        }
+
+        .finding-item {
+            padding: 15px;
+            margin: 10px 0;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 3px solid #dee2e6;
+            transition: background-color 0.2s;
+        }
+
+        .finding-item:hover {
+            background: #e9ecef;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .table-container {
+            overflow-x: auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .severity-critical {
+            color: #dc3545;
+            border-left-color: #dc3545 !important;
+        }
+        .severity-high {
+            color: #fd7e14;
+            border-left-color: #fd7e14 !important;
+        }
+        .severity-medium {
+            color: #ffc107;
+            border-left-color: #ffc107 !important;
+        }
+        .severity-low {
+            color: #20c997;
+            border-left-color: #20c997 !important;
+        }
+        .severity-info {
+            color: #0dcaf0;
+            border-left-color: #0dcaf0 !important;
+        }
+
+        .sidebar {
+            background: #f8f9fa;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .nav-link {
+            color: #495057;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-bottom: 5px;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background: #0d6efd;
+            color: white;
+        }
+
+        .section-card {
+            margin-bottom: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%);
+            color: white;
+            border-radius: 12px 12px 0 0 !important;
+            padding: 20px;
+        }
+
+        .card-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .progress-bar {
+            background: linear-gradient(90deg, #20c997 0%, #0dcaf0 100%);
+        }
+
+        .badge {
+            font-size: 0.9em;
+        }
+
+        .data-source-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .export-buttons {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .btn-floating {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            margin-left: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+    </style>
+</head>
+<body data-bs-spy="scroll" data-bs-target="#navbar" data-bs-offset="70">
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar Navigation -->
+            <nav id="navbar" class="col-md-3 col-lg-2 d-md-block sidebar collapse">
+                <div class="position-sticky pt-3">
+                    <h5 class="text-muted mb-3">Navigation</h5>
+                    <ul class="nav flex-column">
+                        <li class="nav-item">
+                            <a class="nav-link active" href="#summary">
+                                <i class="fas fa-chart-line me-2"></i>Summary
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#findings">
+                                <i class="fas fa-exclamation-triangle me-2"></i>Findings
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#section-executive_insights">
+                                <i class="fas fa-file-alt me-2"></i>Key Insights
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#data-sources">
+                                <i class="fas fa-database me-2"></i>Data Sources
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+
+            <!-- Main Content -->
+            <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+                <!-- Header -->
+                <div id="summary" class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                    <div>
+                        <h1 class="display-4">Executive Dashboard</h1>
+                        <p class="lead">Executive dashboard with key metrics and insights</p>
+                        <div class="text-muted">
+                            <i class="fas fa-clock me-2"></i>
+                            Generated on 2025-09-28 19:59:37 by SQLTest Pro Reporting Engine
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown">
+                            <i class="fas fa-download me-2"></i>Export
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#" onclick="exportToJson()">
+                                <i class="fas fa-code me-2"></i>JSON
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="exportToCsv()">
+                                <i class="fas fa-table me-2"></i>CSV
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="window.print()">
+                                <i class="fas fa-print me-2"></i>PDF
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Executive Summary -->
+                <div class="section-card">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-chart-pie me-2"></i>Executive Summary</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-3 mb-3">
+                                    <div class="metric-card">
+                                        <h3>104.00</h3>
+                                        <p><i class="fas fa-table me-1"></i>Rows Processed</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 mb-3">
+                                    <div class="metric-card">
+                                        <h3>2</h3>
+                                        <p><i class="fas fa-search me-1"></i>Queries Executed</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 mb-3">
+                                    <div class="metric-card">
+                                        <h3>0.00s</h3>
+                                        <p><i class="fas fa-stopwatch me-1"></i>Execution Time</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 mb-3">
+                                    <div class="metric-card">
+                                        <h3>11</h3>
+                                        <p><i class="fas fa-flag me-1"></i>Total Findings</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Performance Bar -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Findings Summary -->
+                <div id="findings" class="section-card">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-exclamation-triangle me-2"></i>Findings Summary</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="finding-group severity-high">
+                                <h4>
+                                    <i class="fas fa-circle me-2" style="color: #fd7e14"></i>
+                                    High
+                                    <span class="badge bg-secondary">2</span>
+                                </h4>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Trend Analysis: id</strong>
+                                            <p class="mb-2">Detected strong increasing trend in id (correlation: 1.000, slope: 1.000)</p>
+                                        </div>
+                                        <span class="badge bg-primary">Trend Analysis</span>
+                                    </div>
+                                </div>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Trend Analysis: value</strong>
+                                            <p class="mb-2">Detected strong increasing trend in value (correlation: 1.000, slope: 10.000)</p>
+                                        </div>
+                                        <span class="badge bg-primary">Trend Analysis</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="finding-group severity-info">
+                                <h4>
+                                    <i class="fas fa-circle me-2" style="color: #0dcaf0"></i>
+                                    Info
+                                    <span class="badge bg-secondary">8</span>
+                                </h4>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Strong Correlations Found</strong>
+                                            <p class="mb-2">Identified 1 strong correlations in main_data</p>
+                                        </div>
+                                        <span class="badge bg-primary">Correlation Analysis</span>
+                                    </div>
+                                </div>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Strong Correlations Found</strong>
+                                            <p class="mb-2">Identified 1 strong correlations in secondary_data</p>
+                                        </div>
+                                        <span class="badge bg-primary">Correlation Analysis</span>
+                                    </div>
+                                </div>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Distribution Analysis: id</strong>
+                                            <p class="mb-2">Distribution analysis for id: light-tailed distribution</p>
+                                        </div>
+                                        <span class="badge bg-primary">Distribution Analysis</span>
+                                    </div>
+                                </div>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Distribution Analysis: value</strong>
+                                            <p class="mb-2">Distribution analysis for value: light-tailed distribution</p>
+                                        </div>
+                                        <span class="badge bg-primary">Distribution Analysis</span>
+                                    </div>
+                                </div>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Pattern Analysis: name</strong>
+                                            <p class="mb-2">Categorical patterns in name: High cardinality (mostly unique values)</p>
+                                        </div>
+                                        <span class="badge bg-primary">Pattern Recognition</span>
+                                    </div>
+                                </div>
+                                <div class="text-center">
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleMoreFindings('info')">
+                                        Show 3 more info findings
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="finding-group severity-low">
+                                <h4>
+                                    <i class="fas fa-circle me-2" style="color: #20c997"></i>
+                                    Low
+                                    <span class="badge bg-secondary">1</span>
+                                </h4>
+                                <div class="finding-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>Low Cache Hit Rate</strong>
+                                            <p class="mb-2">Cache hit rate is only 0.0%</p>
+                                        </div>
+                                        <span class="badge bg-primary">Performance</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Report Sections -->
+                <div id="section-executive_insights" class="section-card">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-file-alt me-2"></i>Key Insights</h2>
+                        </div>
+                        <div class="card-body">
+                            <ul><li>🔥 2 high-priority issues identified</li></ul>
+
+                            <!-- Charts -->
+
+                            <!-- Tables -->
+
+                            <!-- Section Findings -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Sources -->
+                <div id="data-sources" class="section-card">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fas fa-database me-2"></i>Data Sources</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <div class="data-source-card">
+                                        <h5>main_data</h5>
+                                        <p><strong>Type:</strong> DataFrame</p>
+                                        <p><strong>Queries:</strong> 1</p>
+                                        <p><strong>Last Accessed:</strong> 2025-09-28 19:59:37</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <div class="data-source-card">
+                                        <h5>secondary_data</h5>
+                                        <p><strong>Type:</strong> DataFrame</p>
+                                        <p><strong>Queries:</strong> 1</p>
+                                        <p><strong>Last Accessed:</strong> 2025-09-28 19:59:37</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <footer class="pt-4 my-md-5 pt-md-5 border-top">
+                    <div class="row">
+                        <div class="col-12 col-md">
+                            <small class="d-block mb-3 text-muted">
+                                Report generated by SQLTest Pro v1.0
+                                in 0.000 seconds
+                            </small>
+                        </div>
+                    </div>
+                </footer>
+            </main>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Chart initialization
+
+        // Utility functions
+        function exportTableToCsv(tableId, filename) {
+            const table = document.getElementById(tableId).querySelector('table');
+            if (!table) return;
+
+            let csv = [];
+            const rows = table.querySelectorAll('tr');
+
+            for (let i = 0; i < rows.length; i++) {
+                const row = [];
+                const cols = rows[i].querySelectorAll('td, th');
+
+                for (let j = 0; j < cols.length; j++) {
+                    row.push('"' + cols[j].innerText.replace(/"/g, '""') + '"');
+                }
+
+                csv.push(row.join(','));
+            }
+
+            downloadFile(csv.join('\\n'), filename, 'text/csv');
+        }
+
+        function exportToJson() {
+            const reportData = {
+                metadata: {
+                    title: "Executive Dashboard",
+                    description: "Executive dashboard with key metrics and insights",
+                    generated_at: "2025-09-28 19:59:37.338320"
+                },
+                summary_stats: {"findings_by_severity": {"high": 2, "info": 8, "low": 1}, "total_findings": 11, "total_datasets": 2, "total_rows": 104, "total_columns": 10, "analysis_timestamp": "2025-09-28T19:59:37.351190", "analysis_version": "1.0"},
+                findings: []
+            };
+
+            downloadFile(JSON.stringify(reportData, null, 2),
+                        'Executive_Dashboard.json',
+                        'application/json');
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        function toggleMoreFindings(severity) {
+            // Implementation for showing more findings
+            alert('Feature coming soon: Show more ' + severity + ' findings');
+        }
+
+        // Initialize tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+
+        // Smooth scrolling for navigation
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href').substring(1);
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    targetElement.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

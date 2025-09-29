@@ -80,6 +80,9 @@ dependencies = [
     # Statistical analysis
     "scipy>=1.10.0",
     "scikit-learn>=1.3.0",
+
+    # Report scheduling
+    "schedule>=1.2.0",
 ]
 
 [project.optional-dependencies]

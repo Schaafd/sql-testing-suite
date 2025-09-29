@@ -17,6 +17,7 @@ from .analyzer import ReportAnalyzer
 from .generators.json_generator import JSONReportGenerator
 from .generators.csv_generator import CSVReportGenerator
 from .generators.html_generator import HTMLReportGenerator
+from .interactive import TrendAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,89 @@ class ReportingEngine:
         )
 
         return self.generate_report(datasets, config, options, analyze=True)
+
+    def create_interactive_dashboard(self,
+                                   datasets: Dict[str, pd.DataFrame],
+                                   title: str = "Interactive Dashboard",
+                                   include_trends: bool = True) -> ReportGenerationResult:
+        """Create an interactive dashboard with advanced features.
+
+        Args:
+            datasets: Dictionary of datasets to include
+            title: Dashboard title
+            include_trends: Whether to include trend analysis
+
+        Returns:
+            Result of the dashboard generation process
+        """
+        config = ReportConfiguration(
+            report_type="executive",
+            format=ReportFormat.HTML,
+            title=title,
+            description="Interactive dashboard with real-time features and advanced analytics"
+        )
+
+        options = ReportOptions(
+            include_charts=True,
+            include_executive_summary=True,
+            include_raw_data=False,
+            max_rows_per_table=100
+        )
+
+        # Prepare report data
+        report_data = self._prepare_report_data(datasets, config, options)
+
+        # Perform comprehensive analysis
+        if include_trends:
+            report_data = self.analyzer.analyze_report_data(report_data)
+
+        # Use HTML generator to create interactive dashboard
+        generator = report_registry.get_generator(ReportFormat.HTML, options)
+        if hasattr(generator, 'generate_interactive_dashboard'):
+            return generator.generate_interactive_dashboard(report_data)
+        else:
+            return generator.generate(report_data)
+
+    def create_executive_summary_report(self, datasets: Dict[str, pd.DataFrame],
+                                      title: str = "Executive Summary") -> Dict[str, Any]:
+        """Create executive summary with key insights and recommendations.
+
+        Args:
+            datasets: Dictionary of datasets to analyze
+            title: Report title
+
+        Returns:
+            Dictionary containing executive summary data
+        """
+        # Prepare minimal report data for analysis
+        config = ReportConfiguration(
+            report_type="executive",
+            format=ReportFormat.JSON,
+            title=title
+        )
+
+        report_data = self._prepare_report_data(datasets, config, None)
+
+        # Perform analysis to generate findings
+        report_data = self.analyzer.analyze_report_data(report_data)
+
+        # Generate executive summary
+        return TrendAnalyzer.generate_executive_summary(report_data)
+
+    def analyze_trends(self, data: pd.DataFrame, date_column: str,
+                      value_column: str, periods: int = 30) -> Dict[str, Any]:
+        """Analyze trends in time series data.
+
+        Args:
+            data: DataFrame containing time series data
+            date_column: Name of the date column
+            value_column: Name of the value column
+            periods: Number of periods to forecast
+
+        Returns:
+            Dictionary containing trend analysis results
+        """
+        return TrendAnalyzer.analyze_time_series(data, date_column, value_column, periods)
 
     def export_findings_to_csv(self, report_data: ReportData, output_path: Path) -> bool:
         """Export findings to a CSV file.

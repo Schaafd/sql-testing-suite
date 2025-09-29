@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ metadata.title }} - Interactive Dashboard</title>
+
+    <!-- CSS Dependencies -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.1/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/responsive/2.4.0/css/responsive.bootstrap5.min.css" rel="stylesheet">
+
+    <!-- JavaScript Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/dataTables.responsive.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/responsive.bootstrap5.min.js"></script>
+
+    <style>
+        {{ interactive_css|safe }}
+    </style>
+</head>
+<body>
+    <div class="interactive-dashboard">
+        <!-- Dashboard Header -->
+        <div class="dashboard-header">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h1 class="h3 mb-1">{{ metadata.title }}</h1>
+                    <p class="text-muted mb-0">{{ metadata.description or "Interactive Dashboard" }}</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-primary btn-sm" onclick="window.interactiveReport.startRealTimeUpdates()">
+                        <i class="fas fa-sync-alt"></i> Auto-Refresh
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="exportDashboard()">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                    <button class="btn btn-outline-info btn-sm" onclick="toggleFullscreen()">
+                        <i class="fas fa-expand"></i> Full Screen
+                    </button>
+                </div>
+            </div>
+
+            {% if executive_summary %}
+            <div class="row mt-4">
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-chart-line text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">{{ executive_summary.performance_metrics.data_quality_score }}%</div>
+                            <small class="text-muted">Data Quality Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-success rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-tachometer-alt text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">{{ executive_summary.performance_metrics.performance_score }}%</div>
+                            <small class="text-muted">Performance Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-info rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-check-circle text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">{{ executive_summary.performance_metrics.completeness_score }}%</div>
+                            <small class="text-muted">Completeness Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-warning rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-exclamation-triangle text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">{{ executive_summary.critical_issues|length }}</div>
+                            <small class="text-muted">Critical Issues</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Dashboard Filters -->
+        {% if filters %}
+        <div class="dashboard-filters">
+            <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filters</h5>
+            <div class="filter-group">
+                {% for filter in filters %}
+                <div class="filter-control">
+                    <label for="filter_{{ filter.filter_id }}">{{ filter.label }}</label>
+                    {% if filter.filter_type == 'select' %}
+                        <select id="filter_{{ filter.filter_id }}"
+                                class="form-select report-filter"
+                                data-filter-id="{{ filter.filter_id }}"
+                                data-filter-type="{{ filter.filter_type }}"
+                                data-column="{{ filter.column }}">
+                            <option value="">All</option>
+                            {% for option in filter.options %}
+                            <option value="{{ option }}" {% if option == filter.default_value %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    {% elif filter.filter_type == 'range' %}
+                        <div class="d-flex gap-2">
+                            <input type="number" class="form-control range-min" placeholder="Min" data-filter-id="{{ filter.filter_id }}">
+                            <input type="number" class="form-control range-max" placeholder="Max" data-filter-id="{{ filter.filter_id }}">
+                        </div>
+                    {% elif filter.filter_type == 'date' %}
+                        <input type="date"
+                               id="filter_{{ filter.filter_id }}"
+                               class="form-control report-filter"
+                               data-filter-id="{{ filter.filter_id }}"
+                               data-filter-type="{{ filter.filter_type }}"
+                               data-column="{{ filter.column }}"
+                               value="{{ filter.default_value or '' }}">
+                    {% else %}
+                        <input type="text"
+                               id="filter_{{ filter.filter_id }}"
+                               class="form-control report-filter"
+                               data-filter-id="{{ filter.filter_id }}"
+                               data-filter-type="{{ filter.filter_type }}"
+                               data-column="{{ filter.column }}"
+                               placeholder="Search..."
+                               value="{{ filter.default_value or '' }}">
+                    {% endif %}
+                </div>
+                {% endfor %}
+                <div class="filter-control">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-outline-secondary w-100" onclick="clearAllFilters()">
+                        <i class="fas fa-times"></i> Clear Filters
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Widget Container -->
+        <div class="widget-container">
+            {% for widget in widgets %}
+            <div class="widget-card" data-widget-id="{{ widget.widget_id }}">
+                <div class="widget-header">
+                    <h6 class="widget-title">{{ widget.title }}</h6>
+                    <div class="widget-actions">
+                        <button class="widget-action-btn refresh-widget"
+                                data-widget-id="{{ widget.widget_id }}"
+                                title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        {% if widget.widget_type == 'chart' %}
+                        <button class="widget-action-btn export-widget"
+                                data-widget-id="{{ widget.widget_id }}"
+                                data-format="png"
+                                title="Export as PNG">
+                            <i class="fas fa-image"></i>
+                        </button>
+                        {% endif %}
+                        {% if widget.widget_type == 'table' %}
+                        <button class="widget-action-btn export-widget"
+                                data-widget-id="{{ widget.widget_id }}"
+                                data-format="csv"
+                                title="Export as CSV">
+                            <i class="fas fa-file-csv"></i>
+                        </button>
+                        {% endif %}
+                        <button class="widget-action-btn fullscreen-widget"
+                                data-widget-id="{{ widget.widget_id }}"
+                                title="Full Screen">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="widget-content">
+                    {% if widget.widget_type == 'metric_card' %}
+                        <div class="metric-card">
+                            <div class="metric-value {{ widget.data.color }}">{{ widget.data.value }}</div>
+                            {% if widget.data.subtitle %}
+                            <div class="metric-subtitle">{{ widget.data.subtitle }}</div>
+                            {% endif %}
+                            {% if widget.data.trend %}
+                            <div class="metric-trend {{ 'positive' if widget.data.trend > 0 else 'negative' }}">
+                                <i class="fas fa-arrow-{{ 'up' if widget.data.trend > 0 else 'down' }}"></i>
+                                {{ "%.1f"|format(widget.data.trend|abs) }}%
+                            </div>
+                            {% endif %}
+                        </div>
+
+                    {% elif widget.widget_type == 'chart' %}
+                        <div class="chart-widget"
+                             data-widget-id="{{ widget.widget_id }}"
+                             data-chart-data="{{ json_dumps(widget.data)|safe }}"
+                             data-chart-options="{{ json_dumps(widget.options)|safe }}">
+                            <canvas></canvas>
+                        </div>
+
+                    {% elif widget.widget_type == 'table' %}
+                        <div class="table-widget"
+                             data-widget-id="{{ widget.widget_id }}"
+                             data-table-options="{{ json_dumps(widget.options)|safe }}">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        {% for column in widget.data.columns %}
+                                        <th>{{ column }}</th>
+                                        {% endfor %}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in widget.data.data %}
+                                    <tr>
+                                        {% for column in widget.data.columns %}
+                                        <td>{{ row[column] }}</td>
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+
+                    {% elif widget.widget_type == 'kpi_grid' %}
+                        <div class="kpi-grid">
+                            {% for kpi in widget.data.kpis %}
+                            <div class="kpi-item">
+                                <div class="kpi-name">{{ kpi.name }}</div>
+                                <div class="kpi-value">{{ kpi.value }}</div>
+                                {% if kpi.unit %}
+                                <div class="kpi-unit">{{ kpi.unit }}</div>
+                                {% endif %}
+                                {% if kpi.target %}
+                                <div class="kpi-target">Target: {{ kpi.target }}</div>
+                                <div class="kpi-progress">
+                                    <div class="kpi-progress-bar"
+                                         style="width: {{ (kpi.value / kpi.target * 100)|round }}%"></div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if executive_summary and executive_summary.critical_issues %}
+        <!-- Critical Issues Section -->
+        <div class="widget-card">
+            <div class="widget-header">
+                <h6 class="widget-title text-danger">
+                    <i class="fas fa-exclamation-triangle me-2"></i>Critical Issues Requiring Attention
+                </h6>
+            </div>
+            <div class="widget-content">
+                {% for issue in executive_summary.critical_issues[:5] %}
+                <div class="alert alert-danger" role="alert">
+                    <div class="d-flex">
+                        <div class="flex-shrink-0">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div class="flex-grow-1 ms-3">
+                            <h6 class="alert-heading">{{ issue.title }}</h6>
+                            <p class="mb-1">{{ issue.description }}</p>
+                            <small class="text-muted">
+                                Category: {{ issue.category }}
+                                {% if issue.affected_objects %}
+                                | Affects: {{ issue.affected_objects[:3]|join(', ') }}
+                                {% if issue.affected_objects|length > 3 %}and {{ issue.affected_objects|length - 3 }} more{% endif %}
+                                {% endif %}
+                            </small>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if executive_summary and executive_summary.recommendations %}
+        <!-- Recommendations Section -->
+        <div class="widget-card">
+            <div class="widget-header">
+                <h6 class="widget-title text-primary">
+                    <i class="fas fa-lightbulb me-2"></i>Recommendations
+                </h6>
+            </div>
+            <div class="widget-content">
+                <ul class="list-group list-group-flush">
+                    {% for recommendation in executive_summary.recommendations %}
+                    <li class="list-group-item d-flex align-items-center">
+                        <i class="fas fa-check-circle text-success me-3"></i>
+                        {{ recommendation }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div class="mt-4 text-center text-muted">
+            <small>
+                Generated on {{ format_datetime(metadata.generated_at) }} by {{ metadata.generated_by }}
+                | Execution time: {{ format_number(metrics.execution_time, 2) }}s
+                | {{ format_number(metrics.rows_processed) }} rows processed
+            </small>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Interactive Report JavaScript -->
+    <script>
+        {{ interactive_js|safe }}
+
+        // Additional dashboard-specific functions
+        function clearAllFilters() {
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filter.value = '';
+            });
+            window.interactiveReport.applyFilters();
+        }
+
+        function exportDashboard() {
+            // Create a comprehensive export of the dashboard
+            const widgets = [];
+
+            Object.keys(window.interactiveReport.charts).forEach(widgetId => {
+                const chart = window.interactiveReport.charts[widgetId];
+                widgets.push({
+                    id: widgetId,
+                    type: 'chart',
+                    image: chart.toBase64Image()
+                });
+            });
+
+            // Export as PDF would require additional library like jsPDF
+            alert('Dashboard export functionality can be extended with libraries like jsPDF for comprehensive exports.');
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Auto-save filter preferences
+        function saveFilterPreferences() {
+            const filters = {};
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filters[filter.dataset.filterId] = filter.value;
+            });
+            localStorage.setItem('dashboard_filters', JSON.stringify(filters));
+        }
+
+        function loadFilterPreferences() {
+            const saved = localStorage.getItem('dashboard_filters');
+            if (saved) {
+                const filters = JSON.parse(saved);
+                Object.keys(filters).forEach(filterId => {
+                    const element = document.querySelector(`[data-filter-id="${filterId}"]`);
+                    if (element) {
+                        element.value = filters[filterId];
+                    }
+                });
+                window.interactiveReport.applyFilters();
+            }
+        }
+
+        // Initialize filter preferences on load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadFilterPreferences();
+
+            // Save preferences when filters change
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filter.addEventListener('change', saveFilterPreferences);
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                switch(e.key) {
+                    case 'r':
+                        e.preventDefault();
+                        window.interactiveReport.updateAllWidgets();
+                        break;
+                    case 'f':
+                        e.preventDefault();
+                        document.querySelector('.report-filter').focus();
+                        break;
+                    case 'e':
+                        e.preventDefault();
+                        exportDashboard();
+                        break;
+                }
+            }
+        });
+
+        // Performance monitoring
+        window.addEventListener('load', function() {
+            const loadTime = performance.now();
+            console.log(`Dashboard loaded in ${loadTime.toFixed(2)}ms`);
+
+            // Monitor chart rendering performance
+            Object.keys(window.interactiveReport.charts).forEach(widgetId => {
+                const chart = window.interactiveReport.charts[widgetId];
+                chart.options.onComplete = function() {
+                    console.log(`Chart ${widgetId} rendered`);
+                };
+            });
+        });
+    </script>
+</body>
+</html>
