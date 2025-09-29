@@ -1,345 +1,422 @@
 """
-YAML configuration loader for SQL unit testing framework.
+Advanced configuration loading for SQL unit testing framework.
 
-This module handles loading and parsing SQL test suite configurations from YAML files,
-including test definitions, fixtures, assertions, and suite-level settings.
+This module provides enterprise-grade configuration loading with features including
+environment variable substitution, template inheritance, and validation.
 """
-import yaml
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
 import os
 import re
+import yaml
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Union
+from dataclasses import dataclass
+from pydantic import BaseModel, validator, Field
+import logging
 
-from .models import TestSuiteConfig, SQLTestConfig, TestFixtureConfig, TestAssertionConfig
+from ...config.models import DatabaseConfig
+from .models import TestCase, TestSuite, TestFixture, AssertionType
+
+logger = logging.getLogger(__name__)
 
 
-class TestConfigLoader:
-    """Loads and parses SQL test configurations from YAML files."""
-    
-    def __init__(self, base_path: Optional[Path] = None):
-        """
-        Initialize configuration loader.
-        
-        Args:
-            base_path: Base path for resolving relative file paths
-        """
-        self.base_path = base_path or Path.cwd()
-    
-    def load_test_suite(self, config_path: Union[str, Path]) -> TestSuiteConfig:
-        """
-        Load test suite configuration from YAML file.
-        
-        Args:
-            config_path: Path to YAML configuration file
-            
-        Returns:
-            Parsed test suite configuration
-            
-        Raises:
-            FileNotFoundError: If configuration file doesn't exist
-            ValueError: If configuration is invalid
-        """
-        config_path = self._resolve_path(config_path)
-        
-        if not config_path.exists():
-            raise FileNotFoundError(f"Test configuration file not found: {config_path}")
-        
-        with open(config_path, 'r') as f:
+@dataclass
+class ConfigContext:
+    """Context for configuration loading and template rendering."""
+    environment: str
+    base_path: Path
+    variables: Dict[str, Any]
+    include_stack: List[str]
+
+
+class TestAssertionConfig(BaseModel):
+    """Configuration model for test assertions."""
+    type: AssertionType
+    expected: Any
+    tolerance: Optional[float] = None
+    ignore_order: bool = False
+    custom_function: Optional[str] = None
+    message: Optional[str] = None
+
+    @validator('tolerance')
+    def validate_tolerance(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Tolerance must be non-negative")
+        return v
+
+
+class TestFixtureConfig(BaseModel):
+    """Configuration model for test fixtures."""
+    name: str
+    table_name: str
+    fixture_type: str
+    data_source: Union[str, Dict[str, Any], List[Dict[str, Any]]]
+    schema: Optional[Dict[str, str]] = None
+    cleanup: bool = True
+
+    @validator('fixture_type')
+    def validate_fixture_type(cls, v):
+        valid_types = ['csv', 'json', 'sql', 'inline', 'generated']
+        if v not in valid_types:
+            raise ValueError(f"Invalid fixture type. Must be one of: {valid_types}")
+        return v
+
+
+class TestCaseConfig(BaseModel):
+    """Configuration model for individual test cases."""
+    name: str
+    description: Optional[str] = None
+    sql: str
+    fixtures: List[TestFixtureConfig] = Field(default_factory=list)
+    assertions: List[TestAssertionConfig] = Field(default_factory=list)
+    setup_sql: Optional[str] = None
+    teardown_sql: Optional[str] = None
+    timeout: int = 30
+    isolation_level: str = "transaction"
+    tags: List[str] = Field(default_factory=list)
+    depends_on: List[str] = Field(default_factory=list)
+
+    @validator('timeout')
+    def validate_timeout(cls, v):
+        if v <= 0:
+            raise ValueError("Timeout must be positive")
+        return v
+
+    @validator('isolation_level')
+    def validate_isolation_level(cls, v):
+        valid_levels = ['none', 'transaction', 'schema', 'database']
+        if v not in valid_levels:
+            raise ValueError(f"Invalid isolation level. Must be one of: {valid_levels}")
+        return v
+
+
+class TestSuiteConfig(BaseModel):
+    """Configuration model for test suites."""
+    name: str
+    description: Optional[str] = None
+    database: str
+    setup_sql: Optional[str] = None
+    teardown_sql: Optional[str] = None
+    fixtures: List[TestFixtureConfig] = Field(default_factory=list)
+    test_cases: List[TestCaseConfig] = Field(default_factory=list)
+    parallel: bool = False
+    max_workers: int = 4
+    isolation_level: str = "transaction"
+    tags: List[str] = Field(default_factory=list)
+
+    @validator('max_workers')
+    def validate_max_workers(cls, v):
+        if v <= 0:
+            raise ValueError("Max workers must be positive")
+        return v
+
+
+class TestConfigSchema(BaseModel):
+    """Root configuration schema for SQL unit tests."""
+    version: str = "1.0"
+    includes: List[str] = Field(default_factory=list)
+    variables: Dict[str, Any] = Field(default_factory=dict)
+    databases: Dict[str, DatabaseConfig] = Field(default_factory=dict)
+    global_fixtures: List[TestFixtureConfig] = Field(default_factory=list)
+    test_suites: List[TestSuiteConfig] = Field(default_factory=list)
+
+    @validator('version')
+    def validate_version(cls, v):
+        if not re.match(r'^\d+\.\d+$', v):
+            raise ValueError("Version must be in format 'major.minor'")
+        return v
+
+
+class EnvironmentVariableResolver:
+    """Resolves environment variables in configuration with defaults and validation."""
+
+    ENV_VAR_PATTERN = re.compile(r'\$\{([^}]+)\}')
+
+    @classmethod
+    def resolve(cls, value: Any, context: ConfigContext) -> Any:
+        """Resolve environment variables in any value type."""
+        if isinstance(value, str):
+            return cls._resolve_string(value, context)
+        elif isinstance(value, dict):
+            return {k: cls.resolve(v, context) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [cls.resolve(item, context) for item in value]
+        else:
+            return value
+
+    @classmethod
+    def _resolve_string(cls, value: str, context: ConfigContext) -> str:
+        """Resolve environment variables in a string value."""
+        def replacer(match):
+            var_expr = match.group(1)
+
+            # Handle default values: ${VAR_NAME:default_value}
+            if ':' in var_expr:
+                var_name, default_value = var_expr.split(':', 1)
+            else:
+                var_name = var_expr
+                default_value = None
+
+            # Look in context variables first, then environment
+            if var_name in context.variables:
+                return str(context.variables[var_name])
+            elif var_name in os.environ:
+                return os.environ[var_name]
+            elif default_value is not None:
+                return default_value
+            else:
+                raise ValueError(f"Environment variable '{var_name}' not found and no default provided")
+
+        return cls.ENV_VAR_PATTERN.sub(replacer, value)
+
+
+class ConfigTemplateEngine:
+    """Template engine for configuration inheritance and composition."""
+
+    def __init__(self, base_path: Path):
+        self.base_path = base_path
+        self._template_cache: Dict[str, Dict[str, Any]] = {}
+
+    def load_template(self, template_path: str, context: ConfigContext) -> Dict[str, Any]:
+        """Load and process a configuration template."""
+        full_path = self._resolve_path(template_path, context.base_path)
+
+        # Check for circular includes
+        if str(full_path) in context.include_stack:
+            raise ValueError(f"Circular include detected: {' -> '.join(context.include_stack + [str(full_path)])}")
+
+        # Load from cache if available
+        cache_key = f"{full_path}:{context.environment}"
+        if cache_key in self._template_cache:
+            return self._template_cache[cache_key]
+
+        # Load and process template
+        with open(full_path, 'r') as f:
             raw_config = yaml.safe_load(f)
-        
-        # Interpolate environment variables
-        config_data = self._interpolate_env_vars(raw_config)
-        
-        # Handle includes
-        config_data = self._process_includes(config_data, config_path.parent)
-        
-        # Parse and validate configuration
-        return TestSuiteConfig(**config_data)
-    
-    def load_multiple_test_suites(
-        self, 
-        config_paths: List[Union[str, Path]]
-    ) -> List[TestSuiteConfig]:
-        """
-        Load multiple test suite configurations.
-        
-        Args:
-            config_paths: List of paths to YAML configuration files
-            
-        Returns:
-            List of parsed test suite configurations
-        """
-        test_suites = []
-        
-        for config_path in config_paths:
-            try:
-                suite = self.load_test_suite(config_path)
-                test_suites.append(suite)
-            except Exception as e:
-                raise ValueError(f"Failed to load test suite from {config_path}: {e}")
-        
-        return test_suites
-    
-    def discover_test_configurations(
-        self, 
-        directory: Union[str, Path],
-        pattern: str = "**/*test*.yaml"
-    ) -> List[TestSuiteConfig]:
-        """
-        Discover and load all test configurations in a directory.
-        
-        Args:
-            directory: Directory to search for test configurations
-            pattern: Glob pattern for matching test files
-            
-        Returns:
-            List of discovered test suite configurations
-        """
-        directory = Path(directory)
-        
-        if not directory.exists() or not directory.is_dir():
-            raise ValueError(f"Directory not found or not a directory: {directory}")
-        
-        # Find all matching configuration files
-        config_files = list(directory.glob(pattern))
-        
-        return self.load_multiple_test_suites(config_files)
-    
-    def _resolve_path(self, path: Union[str, Path]) -> Path:
-        """Resolve file path relative to base path."""
+
+        # Create new context for this template
+        template_context = ConfigContext(
+            environment=context.environment,
+            base_path=full_path.parent,
+            variables=context.variables.copy(),
+            include_stack=context.include_stack + [str(full_path)]
+        )
+
+        # Process includes first
+        processed_config = self._process_includes(raw_config, template_context)
+
+        # Resolve environment variables
+        processed_config = EnvironmentVariableResolver.resolve(processed_config, template_context)
+
+        # Cache the result
+        self._template_cache[cache_key] = processed_config
+
+        return processed_config
+
+    def _process_includes(self, config: Dict[str, Any], context: ConfigContext) -> Dict[str, Any]:
+        """Process include directives in configuration."""
+        if 'includes' not in config:
+            return config
+
+        result = {}
+
+        # Load and merge included configurations
+        for include_path in config['includes']:
+            included_config = self.load_template(include_path, context)
+            result = self._deep_merge(result, included_config)
+
+        # Merge current configuration on top
+        current_config = {k: v for k, v in config.items() if k != 'includes'}
+        result = self._deep_merge(result, current_config)
+
+        return result
+
+    def _deep_merge(self, base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+        """Deep merge two dictionaries."""
+        result = base.copy()
+
+        for key, value in overlay.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            elif key in result and isinstance(result[key], list) and isinstance(value, list):
+                result[key] = result[key] + value
+            else:
+                result[key] = value
+
+        return result
+
+    def _resolve_path(self, path: str, base_path: Path) -> Path:
+        """Resolve a path relative to base path."""
         path_obj = Path(path)
         if path_obj.is_absolute():
             return path_obj
         else:
-            return self.base_path / path_obj
-    
-    def _interpolate_env_vars(self, data: Any) -> Any:
+            return base_path / path_obj
+
+
+class AdvancedConfigLoader:
+    """Advanced configuration loader with enterprise features."""
+
+    def __init__(self, base_path: Optional[Path] = None):
+        self.base_path = base_path or Path.cwd()
+        self.template_engine = ConfigTemplateEngine(self.base_path)
+        self._schema_cache: Dict[str, TestConfigSchema] = {}
+
+    def load_config(self,
+                   config_path: Union[str, Path],
+                   environment: str = "default",
+                   variables: Optional[Dict[str, Any]] = None) -> TestConfigSchema:
         """
-        Recursively interpolate environment variables in configuration data.
-        
-        Supports ${VAR_NAME} and ${VAR_NAME:default_value} syntax.
-        """
-        if isinstance(data, dict):
-            return {key: self._interpolate_env_vars(value) for key, value in data.items()}
-        elif isinstance(data, list):
-            return [self._interpolate_env_vars(item) for item in data]
-        elif isinstance(data, str):
-            return self._interpolate_string(data)
-        else:
-            return data
-    
-    def _interpolate_string(self, text: str) -> str:
-        """Interpolate environment variables in a string."""
-        pattern = r'\$\{([^}]+)\}'
-        
-        def replace_env_var(match):
-            var_spec = match.group(1)
-            
-            # Check if default value is specified
-            if ':' in var_spec:
-                var_name, default_value = var_spec.split(':', 1)
-            else:
-                var_name = var_spec
-                default_value = None
-            
-            # Get environment variable value
-            env_value = os.getenv(var_name)
-            
-            if env_value is not None:
-                return env_value
-            elif default_value is not None:
-                return default_value
-            else:
-                raise ValueError(f"Environment variable {var_name} not found and no default provided")
-        
-        return re.sub(pattern, replace_env_var, text)
-    
-    def _process_includes(self, config_data: Dict[str, Any], base_dir: Path) -> Dict[str, Any]:
-        """
-        Process include directives in configuration.
-        
-        Supports including other YAML files or specific sections.
-        """
-        if 'include' not in config_data:
-            return config_data
-        
-        includes = config_data.pop('include')
-        if not isinstance(includes, list):
-            includes = [includes]
-        
-        # Process each include
-        for include_spec in includes:
-            if isinstance(include_spec, str):
-                # Simple file include
-                include_path = base_dir / include_spec
-                included_data = self._load_yaml_file(include_path)
-                config_data = self._merge_configs(config_data, included_data)
-            elif isinstance(include_spec, dict):
-                # Advanced include with options
-                file_path = include_spec.get('file')
-                section = include_spec.get('section')
-                
-                if not file_path:
-                    raise ValueError("Include specification must have 'file' key")
-                
-                include_path = base_dir / file_path
-                included_data = self._load_yaml_file(include_path)
-                
-                # Extract specific section if specified
-                if section:
-                    if section not in included_data:
-                        raise ValueError(f"Section '{section}' not found in {include_path}")
-                    included_data = {section: included_data[section]}
-                
-                config_data = self._merge_configs(config_data, included_data)
-        
-        return config_data
-    
-    def _load_yaml_file(self, file_path: Path) -> Dict[str, Any]:
-        """Load and parse a YAML file."""
-        if not file_path.exists():
-            raise FileNotFoundError(f"Include file not found: {file_path}")
-        
-        with open(file_path, 'r') as f:
-            data = yaml.safe_load(f)
-        
-        # Recursively process includes and environment variables
-        data = self._interpolate_env_vars(data)
-        data = self._process_includes(data, file_path.parent)
-        
-        return data
-    
-    def _merge_configs(self, base_config: Dict[str, Any], include_config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Merge configuration dictionaries.
-        
-        Lists are extended, dictionaries are merged recursively.
-        """
-        result = base_config.copy()
-        
-        for key, value in include_config.items():
-            if key in result:
-                if isinstance(result[key], dict) and isinstance(value, dict):
-                    result[key] = self._merge_configs(result[key], value)
-                elif isinstance(result[key], list) and isinstance(value, list):
-                    result[key].extend(value)
-                else:
-                    result[key] = value  # Override
-            else:
-                result[key] = value
-        
-        return result
-    
-    def validate_configuration(self, config: TestSuiteConfig) -> List[str]:
-        """
-        Validate test suite configuration and return list of issues.
-        
+        Load and validate test configuration from file.
+
         Args:
-            config: Test suite configuration to validate
-            
+            config_path: Path to configuration file
+            environment: Environment name for variable resolution
+            variables: Additional variables for template rendering
+
         Returns:
-            List of validation error messages
+            Validated configuration schema
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If configuration is invalid
+        """
+        config_path = Path(config_path)
+        if not config_path.is_absolute():
+            config_path = self.base_path / config_path
+
+        if not config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+        # Create loading context
+        context = ConfigContext(
+            environment=environment,
+            base_path=config_path.parent,
+            variables=variables or {},
+            include_stack=[]
+        )
+
+        # Load configuration with template processing
+        try:
+            config_data = self.template_engine.load_template(str(config_path), context)
+
+            # Validate and create schema
+            config_schema = TestConfigSchema(**config_data)
+
+            # Cache for future use
+            cache_key = f"{config_path}:{environment}"
+            self._schema_cache[cache_key] = config_schema
+
+            logger.info(f"Loaded configuration from {config_path} for environment '{environment}'")
+            return config_schema
+
+        except Exception as e:
+            logger.error(f"Failed to load configuration from {config_path}: {e}")
+            raise ValueError(f"Configuration loading failed: {e}") from e
+
+    def load_from_dict(self,
+                      config_data: Dict[str, Any],
+                      environment: str = "default",
+                      variables: Optional[Dict[str, Any]] = None) -> TestConfigSchema:
+        """
+        Load and validate configuration from dictionary.
+
+        Args:
+            config_data: Configuration data as dictionary
+            environment: Environment name for variable resolution
+            variables: Additional variables for template rendering
+
+        Returns:
+            Validated configuration schema
+        """
+        context = ConfigContext(
+            environment=environment,
+            base_path=self.base_path,
+            variables=variables or {},
+            include_stack=[]
+        )
+
+        # Resolve environment variables
+        resolved_data = EnvironmentVariableResolver.resolve(config_data, context)
+
+        # Validate and create schema
+        return TestConfigSchema(**resolved_data)
+
+    def validate_config(self, config_path: Union[str, Path]) -> List[str]:
+        """
+        Validate configuration file without loading.
+
+        Args:
+            config_path: Path to configuration file
+
+        Returns:
+            List of validation errors (empty if valid)
         """
         errors = []
-        
-        # Check for duplicate test names
-        test_names = [test.name for test in config.tests]
-        if len(test_names) != len(set(test_names)):
-            duplicates = [name for name in set(test_names) if test_names.count(name) > 1]
-            errors.append(f"Duplicate test names found: {', '.join(duplicates)}")
-        
-        # Validate individual tests
-        for test in config.tests:
-            test_errors = self._validate_test(test)
-            errors.extend([f"Test '{test.name}': {error}" for error in test_errors])
-        
-        # Check dependencies
-        all_test_names = set(test_names)
-        for test in config.tests:
-            for dep in test.depends_on:
-                if dep not in all_test_names:
-                    errors.append(f"Test '{test.name}' depends on non-existent test '{dep}'")
-        
-        # Check for circular dependencies
-        circular_deps = self._find_circular_dependencies(config.tests)
-        if circular_deps:
-            errors.append(f"Circular dependencies detected: {circular_deps}")
-        
+
+        try:
+            self.load_config(config_path)
+        except FileNotFoundError as e:
+            errors.append(str(e))
+        except ValueError as e:
+            errors.append(str(e))
+        except Exception as e:
+            errors.append(f"Unexpected error: {e}")
+
         return errors
-    
-    def _validate_test(self, test: SQLTestConfig) -> List[str]:
-        """Validate individual test configuration."""
-        errors = []
-        
-        # Check SQL is not empty
-        if not test.sql.strip():
-            errors.append("SQL cannot be empty")
-        
-        # Check at least one assertion
-        if not test.assertions:
-            errors.append("Test must have at least one assertion")
-        
-        # Validate fixture names are unique
-        fixture_names = [f.name for f in test.fixtures]
-        if len(fixture_names) != len(set(fixture_names)):
-            duplicates = [name for name in set(fixture_names) if fixture_names.count(name) > 1]
-            errors.append(f"Duplicate fixture names: {', '.join(duplicates)}")
-        
-        # Validate assertions
-        for i, assertion in enumerate(test.assertions):
-            if assertion.assertion_type == 'custom' and not assertion.custom_function:
-                errors.append(f"Assertion {i + 1}: Custom assertion requires custom_function")
-        
-        return errors
-    
-    def _find_circular_dependencies(self, tests: List[SQLTestConfig]) -> Optional[str]:
-        """Find circular dependencies in test configurations."""
-        # Build dependency graph
-        graph = {}
-        for test in tests:
-            graph[test.name] = test.depends_on
-        
-        # DFS to detect cycles
-        visited = set()
-        rec_stack = set()
-        
-        def has_cycle(node: str) -> Optional[List[str]]:
-            if node not in graph:
-                return None
-            
-            visited.add(node)
-            rec_stack.add(node)
-            
-            for neighbor in graph[node]:
-                if neighbor not in visited:
-                    cycle = has_cycle(neighbor)
-                    if cycle:
-                        return [node] + cycle
-                elif neighbor in rec_stack:
-                    return [node, neighbor]
-            
-            rec_stack.remove(node)
-            return None
-        
-        for test_name in graph:
-            if test_name not in visited:
-                cycle = has_cycle(test_name)
-                if cycle:
-                    return " -> ".join(cycle)
-        
-        return None
+
+    def generate_schema_documentation(self) -> str:
+        """Generate documentation for the configuration schema."""
+        docs = []
+        docs.append("# SQL Unit Test Configuration Schema\n")
+
+        docs.append("## Root Configuration\n")
+        docs.append("```yaml")
+        docs.append("version: '1.0'  # Configuration schema version")
+        docs.append("includes:       # List of configuration files to include")
+        docs.append("  - common.yaml")
+        docs.append("variables:      # Variables for template substitution")
+        docs.append("  db_host: localhost")
+        docs.append("databases:      # Database connection configurations")
+        docs.append("  test_db:")
+        docs.append("    driver: postgresql")
+        docs.append("    host: ${DB_HOST:localhost}")
+        docs.append("    database: ${DB_NAME}")
+        docs.append("```\n")
+
+        docs.append("## Test Suites\n")
+        docs.append("```yaml")
+        docs.append("test_suites:")
+        docs.append("  - name: user_tests")
+        docs.append("    description: Tests for user management")
+        docs.append("    database: test_db")
+        docs.append("    parallel: true")
+        docs.append("    max_workers: 4")
+        docs.append("    isolation_level: transaction")
+        docs.append("```\n")
+
+        docs.append("## Environment Variables\n")
+        docs.append("Supported syntax:")
+        docs.append("- `${VAR_NAME}` - Required variable")
+        docs.append("- `${VAR_NAME:default}` - Variable with default value\n")
+
+        return "\n".join(docs)
+
+    def clear_cache(self):
+        """Clear all caches."""
+        self._schema_cache.clear()
+        self.template_engine._template_cache.clear()
 
 
-# Factory function for creating test objects from YAML
-def create_test_suite_from_yaml(yaml_path: Union[str, Path]) -> TestSuiteConfig:
-    """
-    Convenience function to create test suite from YAML file.
-    
-    Args:
-        yaml_path: Path to YAML configuration file
-        
-    Returns:
-        Test suite configuration object
-    """
-    loader = TestConfigLoader()
-    return loader.load_test_suite(yaml_path)
+# Convenience functions for common operations
+def load_test_config(config_path: Union[str, Path],
+                    environment: str = "default",
+                    variables: Optional[Dict[str, Any]] = None) -> TestConfigSchema:
+    """Convenience function to load test configuration."""
+    loader = AdvancedConfigLoader()
+    return loader.load_config(config_path, environment, variables)
+
+
+def validate_test_config(config_path: Union[str, Path]) -> List[str]:
+    """Convenience function to validate test configuration."""
+    loader = AdvancedConfigLoader()
+    return loader.validate_config(config_path)

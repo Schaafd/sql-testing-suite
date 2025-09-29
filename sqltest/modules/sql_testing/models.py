@@ -46,6 +46,14 @@ class AssertionType(str, Enum):
     CUSTOM = "custom"
 
 
+class TestIsolationLevel(str, Enum):
+    """Test isolation levels for database testing."""
+    NONE = "none"           # No isolation
+    TRANSACTION = "transaction"  # Transaction-level isolation with rollback
+    SCHEMA = "schema"        # Schema-level isolation with temporary schemas
+    DATABASE = "database"    # Database-level isolation (most isolated)
+
+
 @dataclass
 class TestFixture:
     """Represents test data fixture."""
