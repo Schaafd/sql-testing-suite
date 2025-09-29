@@ -48,7 +48,7 @@ class DatabaseConfig(BaseModel):
     # Snowflake-specific fields
     account: Optional[str] = None
     warehouse: Optional[str] = None
-    schema: Optional[str] = None
+    schema_name: Optional[str] = Field(None, alias='schema')  # Renamed to avoid BaseModel conflict
     role: Optional[str] = None
 
     @field_validator('port')

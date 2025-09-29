@@ -104,7 +104,7 @@ def demo_business_rules(sales_data, customer_data, product_data):
 
     try:
         from sqltest.modules.business_rules import BusinessRuleEngine
-        from sqltest.modules.business_rules.models import BusinessRule, RuleType, SeverityLevel
+        from sqltest.modules.business_rules.models import BusinessRule, RuleType, RuleSeverity as SeverityLevel
 
         print_step("Initializing Business Rules Engine")
 

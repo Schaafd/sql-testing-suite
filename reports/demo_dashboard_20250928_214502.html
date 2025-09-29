@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo Dashboard - Interactive Dashboard</title>
+
+    <!-- CSS Dependencies -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.1/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/responsive/2.4.0/css/responsive.bootstrap5.min.css" rel="stylesheet">
+
+    <!-- JavaScript Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/dataTables.responsive.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/responsive.bootstrap5.min.js"></script>
+
+    <style>
+        
+/* Interactive Report Styles */
+.interactive-dashboard {
+    padding: 20px;
+    background: #f8f9fa;
+    min-height: 100vh;
+}
+
+.dashboard-header {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.dashboard-filters {
+    background: white;
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.filter-group {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    align-items: end;
+}
+
+.filter-control {
+    flex: 1;
+    min-width: 200px;
+}
+
+.filter-control label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #495057;
+}
+
+.filter-control input,
+.filter-control select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.widget-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.widget-card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.widget-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.widget-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid #e9ecef;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f8f9fa;
+}
+
+.widget-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #495057;
+    margin: 0;
+}
+
+.widget-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.widget-action-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.widget-action-btn:hover {
+    color: #495057;
+    background: #e9ecef;
+}
+
+.widget-content {
+    padding: 20px;
+}
+
+/* Metric Card Styles */
+.metric-card {
+    text-align: center;
+}
+
+.metric-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #0d6efd;
+}
+
+.metric-value.success { color: #198754; }
+.metric-value.warning { color: #ffc107; }
+.metric-value.danger { color: #dc3545; }
+.metric-value.info { color: #0dcaf0; }
+
+.metric-subtitle {
+    color: #6c757d;
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.metric-trend {
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    display: inline-block;
+}
+
+.metric-trend.positive {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.metric-trend.negative {
+    background: #f8d7da;
+    color: #842029;
+}
+
+/* Chart Widget Styles */
+.chart-widget .widget-content {
+    position: relative;
+    height: 300px;
+}
+
+.chart-widget canvas {
+    max-height: 100%;
+}
+
+/* Table Widget Styles */
+.table-widget .widget-content {
+    padding: 0;
+}
+
+.table-widget table {
+    margin: 0;
+}
+
+.table-widget .dataTables_wrapper {
+    padding: 20px;
+}
+
+/* KPI Grid Styles */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+}
+
+.kpi-item {
+    text-align: center;
+    padding: 15px;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    background: #f8f9fa;
+}
+
+.kpi-name {
+    font-size: 12px;
+    color: #6c757d;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kpi-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 5px;
+}
+
+.kpi-target {
+    font-size: 11px;
+    color: #6c757d;
+}
+
+.kpi-progress {
+    width: 100%;
+    height: 4px;
+    background: #e9ecef;
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.kpi-progress-bar {
+    height: 100%;
+    background: #0d6efd;
+    transition: width 0.3s ease;
+}
+
+/* Fullscreen Widget */
+.fullscreen-widget-active {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+    background: white;
+    overflow: auto;
+}
+
+.fullscreen-widget-active .widget-content {
+    height: calc(100vh - 80px);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .widget-container {
+        grid-template-columns: 1fr;
+    }
+
+    .filter-group {
+        flex-direction: column;
+    }
+
+    .filter-control {
+        min-width: unset;
+    }
+
+    .dashboard-header,
+    .dashboard-filters {
+        margin-left: -10px;
+        margin-right: -10px;
+        border-radius: 0;
+    }
+
+    .interactive-dashboard {
+        padding: 10px;
+    }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .interactive-dashboard {
+        background: #212529;
+        color: #f8f9fa;
+    }
+
+    .widget-card,
+    .dashboard-header,
+    .dashboard-filters {
+        background: #343a40;
+        color: #f8f9fa;
+    }
+
+    .widget-header {
+        background: #495057;
+        border-bottom-color: #6c757d;
+    }
+
+    .filter-control input,
+    .filter-control select {
+        background: #495057;
+        border-color: #6c757d;
+        color: #f8f9fa;
+    }
+
+    .kpi-item {
+        background: #495057;
+        border-color: #6c757d;
+    }
+}
+
+/* Loading States */
+.widget-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.widget-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #0d6efd;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Print Styles */
+@media print {
+    .widget-actions,
+    .dashboard-filters {
+        display: none;
+    }
+
+    .widget-card {
+        break-inside: avoid;
+        box-shadow: none;
+        border: 1px solid #ccc;
+    }
+
+    .interactive-dashboard {
+        background: white;
+    }
+}
+        
+    </style>
+</head>
+<body>
+    <div class="interactive-dashboard">
+        <!-- Dashboard Header -->
+        <div class="dashboard-header">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h1 class="h3 mb-1">Demo Dashboard</h1>
+                    <p class="text-muted mb-0">Interactive dashboard with real-time features and advanced analytics</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-primary btn-sm" onclick="window.interactiveReport.startRealTimeUpdates()">
+                        <i class="fas fa-sync-alt"></i> Auto-Refresh
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="exportDashboard()">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                    <button class="btn btn-outline-info btn-sm" onclick="toggleFullscreen()">
+                        <i class="fas fa-expand"></i> Full Screen
+                    </button>
+                </div>
+            </div>
+
+            <div class="row mt-4">
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-chart-line text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">100%</div>
+                            <small class="text-muted">Data Quality Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-success rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-tachometer-alt text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">90%</div>
+                            <small class="text-muted">Performance Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-info rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-check-circle text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">100.0%</div>
+                            <small class="text-muted">Completeness Score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3">
+                            <div class="bg-warning rounded-circle d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                                <i class="fas fa-exclamation-triangle text-white"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="fw-bold">0</div>
+                            <small class="text-muted">Critical Issues</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Filters -->
+        <div class="dashboard-filters">
+            <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filters</h5>
+            <div class="filter-group">
+                <div class="filter-control">
+                    <label for="filter_sales_data_region">Region</label>
+                        <select id="filter_sales_data_region"
+                                class="form-select report-filter"
+                                data-filter-id="sales_data_region"
+                                data-filter-type="select"
+                                data-column="region">
+                            <option value="">All</option>
+                            <option value="East" >East</option>
+                            <option value="North" >North</option>
+                            <option value="South" >South</option>
+                            <option value="West" >West</option>
+                        </select>
+                </div>
+                <div class="filter-control">
+                    <label for="filter_sales_data_date">Date</label>
+                        <input type="date"
+                               id="filter_sales_data_date"
+                               class="form-control report-filter"
+                               data-filter-id="sales_data_date"
+                               data-filter-type="date"
+                               data-column="date"
+                               value="">
+                </div>
+                <div class="filter-control">
+                    <label for="filter_sales_data_sales_amount">Sales Amount</label>
+                        <div class="d-flex gap-2">
+                            <input type="number" class="form-control range-min" placeholder="Min" data-filter-id="sales_data_sales_amount">
+                            <input type="number" class="form-control range-max" placeholder="Max" data-filter-id="sales_data_sales_amount">
+                        </div>
+                </div>
+                <div class="filter-control">
+                    <label for="filter_sales_data_customer_count">Customer Count</label>
+                        <div class="d-flex gap-2">
+                            <input type="number" class="form-control range-min" placeholder="Min" data-filter-id="sales_data_customer_count">
+                            <input type="number" class="form-control range-max" placeholder="Max" data-filter-id="sales_data_customer_count">
+                        </div>
+                </div>
+                <div class="filter-control">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-outline-secondary w-100" onclick="clearAllFilters()">
+                        <i class="fas fa-times"></i> Clear Filters
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Widget Container -->
+        <div class="widget-container">
+            <div class="widget-card" data-widget-id="data_overview">
+                <div class="widget-header">
+                    <h6 class="widget-title">Data Overview</h6>
+                    <div class="widget-actions">
+                        <button class="widget-action-btn refresh-widget"
+                                data-widget-id="data_overview"
+                                title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <button class="widget-action-btn fullscreen-widget"
+                                data-widget-id="data_overview"
+                                title="Full Screen">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="widget-content">
+                        <div class="kpi-grid">
+                            <div class="kpi-item">
+                                <div class="kpi-name">Total Datasets</div>
+                                <div class="kpi-value">1</div>
+                                <div class="kpi-unit">datasets</div>
+                            </div>
+                            <div class="kpi-item">
+                                <div class="kpi-name">Total Rows</div>
+                                <div class="kpi-value">30</div>
+                                <div class="kpi-unit">rows</div>
+                            </div>
+                            <div class="kpi-item">
+                                <div class="kpi-name">Generation Time</div>
+                                <div class="kpi-value">0.00</div>
+                                <div class="kpi-unit">seconds</div>
+                            </div>
+                            <div class="kpi-item">
+                                <div class="kpi-name">Data Quality Score</div>
+                                <div class="kpi-value">100</div>
+                                <div class="kpi-unit">%</div>
+                            </div>
+                        </div>
+                </div>
+            </div>
+            <div class="widget-card" data-widget-id="findings_by_severity">
+                <div class="widget-header">
+                    <h6 class="widget-title">Findings by Severity</h6>
+                    <div class="widget-actions">
+                        <button class="widget-action-btn refresh-widget"
+                                data-widget-id="findings_by_severity"
+                                title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <button class="widget-action-btn export-widget"
+                                data-widget-id="findings_by_severity"
+                                data-format="png"
+                                title="Export as PNG">
+                            <i class="fas fa-image"></i>
+                        </button>
+                        <button class="widget-action-btn fullscreen-widget"
+                                data-widget-id="findings_by_severity"
+                                title="Full Screen">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="widget-content">
+                        <div class="chart-widget"
+                             data-widget-id="findings_by_severity"
+                             data-chart-data="{"labels": ["low", "info"], "datasets": [{"label": "Number of Findings", "data": [3, 2], "backgroundColor": ["#dc3545", "#fd7e14"]}]}"
+                             data-chart-options="{"chart_type": "doughnut"}">
+                            <canvas></canvas>
+                        </div>
+
+                </div>
+            </div>
+            <div class="widget-card" data-widget-id="recent_findings">
+                <div class="widget-header">
+                    <h6 class="widget-title">Recent Findings</h6>
+                    <div class="widget-actions">
+                        <button class="widget-action-btn refresh-widget"
+                                data-widget-id="recent_findings"
+                                title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <button class="widget-action-btn export-widget"
+                                data-widget-id="recent_findings"
+                                data-format="csv"
+                                title="Export as CSV">
+                            <i class="fas fa-file-csv"></i>
+                        </button>
+                        <button class="widget-action-btn fullscreen-widget"
+                                data-widget-id="recent_findings"
+                                title="Full Screen">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="widget-content">
+                        <div class="table-widget"
+                             data-widget-id="recent_findings"
+                             data-table-options="{"paginate": true, "searchable": true, "sortable": true, "page_size": 10}">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Title</th>
+                                        <th>Severity</th>
+                                        <th>Category</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Low Cache Hit Rate</td>
+                                        <td>low</td>
+                                        <td>Performance</td>
+                                        <td>2025-09-28 21:45</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Distribution Analysis: customer_count</td>
+                                        <td>info</td>
+                                        <td>Distribution Analysis</td>
+                                        <td>2025-09-28 21:45</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Distribution Analysis: sales_amount</td>
+                                        <td>info</td>
+                                        <td>Distribution Analysis</td>
+                                        <td>2025-09-28 21:45</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Trend Analysis: customer_count</td>
+                                        <td>low</td>
+                                        <td>Trend Analysis</td>
+                                        <td>2025-09-28 21:45</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Trend Analysis: sales_amount</td>
+                                        <td>low</td>
+                                        <td>Trend Analysis</td>
+                                        <td>2025-09-28 21:45</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Recommendations Section -->
+        <div class="widget-card">
+            <div class="widget-header">
+                <h6 class="widget-title text-primary">
+                    <i class="fas fa-lightbulb me-2"></i>Recommendations
+                </h6>
+            </div>
+            <div class="widget-content">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex align-items-center">
+                        <i class="fas fa-check-circle text-success me-3"></i>
+                        Improve caching strategy for better performance
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-4 text-center text-muted">
+            <small>
+                Generated on 2025-09-28 21:45:02 by SQLTest Pro Reporting Engine
+                | Execution time: 0.00s
+                | 30.00 rows processed
+            </small>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Interactive Report JavaScript -->
+    <script>
+        
+// Interactive Report JavaScript
+class InteractiveReport {
+    constructor() {
+        this.charts = {};
+        this.tables = {};
+        this.filters = {};
+        this.data = {};
+        this.init();
+    }
+
+    init() {
+        this.setupFilters();
+        this.setupCharts();
+        this.setupTables();
+        this.setupEventListeners();
+    }
+
+    setupFilters() {
+        // Initialize filter controls
+        document.querySelectorAll('.report-filter').forEach(filter => {
+            const filterId = filter.dataset.filterId;
+            const filterType = filter.dataset.filterType;
+
+            this.filters[filterId] = {
+                element: filter,
+                type: filterType,
+                column: filter.dataset.column
+            };
+
+            // Add event listeners
+            filter.addEventListener('change', (e) => {
+                this.applyFilters();
+            });
+        });
+    }
+
+    setupCharts() {
+        // Initialize Chart.js charts
+        document.querySelectorAll('.chart-widget').forEach(chartElement => {
+            const widgetId = chartElement.dataset.widgetId;
+            const chartData = JSON.parse(chartElement.dataset.chartData);
+            const chartOptions = JSON.parse(chartElement.dataset.chartOptions || '{}');
+
+            const canvas = chartElement.querySelector('canvas');
+            if (canvas) {
+                this.charts[widgetId] = new Chart(canvas, {
+                    type: chartOptions.chart_type || 'bar',
+                    data: chartData,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        ...chartOptions
+                    }
+                });
+            }
+        });
+    }
+
+    setupTables() {
+        // Initialize DataTables
+        document.querySelectorAll('.table-widget').forEach(tableElement => {
+            const widgetId = tableElement.dataset.widgetId;
+            const tableOptions = JSON.parse(tableElement.dataset.tableOptions || '{}');
+
+            const table = tableElement.querySelector('table');
+            if (table && typeof $ !== 'undefined' && $.fn.DataTable) {
+                this.tables[widgetId] = $(table).DataTable({
+                    responsive: true,
+                    searching: tableOptions.searchable !== false,
+                    paging: tableOptions.paginate !== false,
+                    ordering: tableOptions.sortable !== false,
+                    pageLength: tableOptions.page_size || 25,
+                    dom: '<"row"<"col-sm-12 col-md-6"l><"col-sm-12 col-md-6"f>>' +
+                         '<"row"<"col-sm-12"tr>>' +
+                         '<"row"<"col-sm-12 col-md-5"i><"col-sm-12 col-md-7"p>>',
+                    language: {
+                        search: "Search:",
+                        lengthMenu: "Show _MENU_ entries",
+                        info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                        paginate: {
+                            first: "First",
+                            last: "Last",
+                            next: "Next",
+                            previous: "Previous"
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    setupEventListeners() {
+        // Refresh button
+        document.querySelectorAll('.refresh-widget').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const widgetId = e.target.dataset.widgetId;
+                this.refreshWidget(widgetId);
+            });
+        });
+
+        // Export buttons
+        document.querySelectorAll('.export-widget').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const widgetId = e.target.dataset.widgetId;
+                const format = e.target.dataset.format;
+                this.exportWidget(widgetId, format);
+            });
+        });
+
+        // Full screen toggle
+        document.querySelectorAll('.fullscreen-widget').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const widgetId = e.target.dataset.widgetId;
+                this.toggleFullscreen(widgetId);
+            });
+        });
+    }
+
+    applyFilters() {
+        // Apply all active filters to widgets
+        const activeFilters = {};
+
+        Object.keys(this.filters).forEach(filterId => {
+            const filter = this.filters[filterId];
+            const value = this.getFilterValue(filter);
+
+            if (value !== null && value !== '') {
+                activeFilters[filter.column] = {
+                    type: filter.type,
+                    value: value
+                };
+            }
+        });
+
+        // Update charts and tables based on filters
+        this.updateWidgets(activeFilters);
+    }
+
+    getFilterValue(filter) {
+        const element = filter.element;
+
+        switch (filter.type) {
+            case 'select':
+                return element.value;
+            case 'range':
+                const min = element.querySelector('.range-min').value;
+                const max = element.querySelector('.range-max').value;
+                return { min: min, max: max };
+            case 'date':
+                return element.value;
+            case 'text':
+                return element.value;
+            default:
+                return element.value;
+        }
+    }
+
+    updateWidgets(filters) {
+        // Update charts
+        Object.keys(this.charts).forEach(widgetId => {
+            this.updateChartData(widgetId, filters);
+        });
+
+        // Update tables
+        Object.keys(this.tables).forEach(widgetId => {
+            this.updateTableData(widgetId, filters);
+        });
+    }
+
+    updateChartData(widgetId, filters) {
+        // This would typically make an AJAX call to get filtered data
+        // For now, we'll just log the action
+        console.log(`Updating chart ${widgetId} with filters:`, filters);
+    }
+
+    updateTableData(widgetId, filters) {
+        // Apply filters to DataTable
+        const table = this.tables[widgetId];
+        if (table) {
+            // Clear existing search
+            table.search('').columns().search('').draw();
+
+            // Apply new filters
+            Object.keys(filters).forEach(column => {
+                const filter = filters[column];
+                const columnIndex = table.column(`${column}:name`).index();
+
+                if (columnIndex >= 0) {
+                    if (filter.type === 'text') {
+                        table.column(columnIndex).search(filter.value);
+                    }
+                    // Add more filter types as needed
+                }
+            });
+
+            table.draw();
+        }
+    }
+
+    refreshWidget(widgetId) {
+        console.log(`Refreshing widget: ${widgetId}`);
+        // Implement widget refresh logic
+        // This would typically reload data from the server
+    }
+
+    exportWidget(widgetId, format) {
+        console.log(`Exporting widget ${widgetId} as ${format}`);
+
+        if (format === 'csv' && this.tables[widgetId]) {
+            // Export table data as CSV
+            const table = this.tables[widgetId];
+            const data = table.data().toArray();
+            this.downloadCSV(data, `${widgetId}_export.csv`);
+        } else if (format === 'png' && this.charts[widgetId]) {
+            // Export chart as PNG
+            const chart = this.charts[widgetId];
+            const url = chart.toBase64Image();
+            this.downloadImage(url, `${widgetId}_chart.png`);
+        }
+    }
+
+    downloadCSV(data, filename) {
+        const csv = this.arrayToCSV(data);
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        window.URL.revokeObjectURL(url);
+    }
+
+    downloadImage(dataURL, filename) {
+        const a = document.createElement('a');
+        a.href = dataURL;
+        a.download = filename;
+        a.click();
+    }
+
+    arrayToCSV(data) {
+        if (!data || data.length === 0) return '';
+
+        const headers = Object.keys(data[0]);
+        const csvContent = [
+            headers.join(','),
+            ...data.map(row => headers.map(header => {
+                const value = row[header];
+                return typeof value === 'string' ? `"${value.replace(/"/g, '""')}"` : value;
+            }).join(','))
+        ].join('\n');
+
+        return csvContent;
+    }
+
+    toggleFullscreen(widgetId) {
+        const widget = document.querySelector(`[data-widget-id="${widgetId}"]`);
+        if (widget) {
+            widget.classList.toggle('fullscreen-widget-active');
+
+            // Resize charts after fullscreen toggle
+            if (this.charts[widgetId]) {
+                setTimeout(() => {
+                    this.charts[widgetId].resize();
+                }, 300);
+            }
+        }
+    }
+
+    // Real-time updates
+    startRealTimeUpdates(intervalSeconds = 300) {
+        setInterval(() => {
+            this.updateAllWidgets();
+        }, intervalSeconds * 1000);
+    }
+
+    updateAllWidgets() {
+        // Refresh all widgets with latest data
+        Object.keys(this.charts).forEach(widgetId => {
+            this.refreshWidget(widgetId);
+        });
+    }
+}
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    window.interactiveReport = new InteractiveReport();
+});
+
+// Utility functions
+function formatNumber(value, decimals = 0) {
+    return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+    });
+}
+
+function formatPercentage(value, decimals = 1) {
+    return `${(value * 100).toFixed(decimals)}%`;
+}
+
+function formatCurrency(value, currency = 'USD') {
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currency
+    }).format(value);
+}
+        
+
+        // Additional dashboard-specific functions
+        function clearAllFilters() {
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filter.value = '';
+            });
+            window.interactiveReport.applyFilters();
+        }
+
+        function exportDashboard() {
+            // Create a comprehensive export of the dashboard
+            const widgets = [];
+
+            Object.keys(window.interactiveReport.charts).forEach(widgetId => {
+                const chart = window.interactiveReport.charts[widgetId];
+                widgets.push({
+                    id: widgetId,
+                    type: 'chart',
+                    image: chart.toBase64Image()
+                });
+            });
+
+            // Export as PDF would require additional library like jsPDF
+            alert('Dashboard export functionality can be extended with libraries like jsPDF for comprehensive exports.');
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Auto-save filter preferences
+        function saveFilterPreferences() {
+            const filters = {};
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filters[filter.dataset.filterId] = filter.value;
+            });
+            localStorage.setItem('dashboard_filters', JSON.stringify(filters));
+        }
+
+        function loadFilterPreferences() {
+            const saved = localStorage.getItem('dashboard_filters');
+            if (saved) {
+                const filters = JSON.parse(saved);
+                Object.keys(filters).forEach(filterId => {
+                    const element = document.querySelector(`[data-filter-id="${filterId}"]`);
+                    if (element) {
+                        element.value = filters[filterId];
+                    }
+                });
+                window.interactiveReport.applyFilters();
+            }
+        }
+
+        // Initialize filter preferences on load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadFilterPreferences();
+
+            // Save preferences when filters change
+            document.querySelectorAll('.report-filter').forEach(filter => {
+                filter.addEventListener('change', saveFilterPreferences);
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                switch(e.key) {
+                    case 'r':
+                        e.preventDefault();
+                        window.interactiveReport.updateAllWidgets();
+                        break;
+                    case 'f':
+                        e.preventDefault();
+                        document.querySelector('.report-filter').focus();
+                        break;
+                    case 'e':
+                        e.preventDefault();
+                        exportDashboard();
+                        break;
+                }
+            }
+        });
+
+        // Performance monitoring
+        window.addEventListener('load', function() {
+            const loadTime = performance.now();
+            console.log(`Dashboard loaded in ${loadTime.toFixed(2)}ms`);
+
+            // Monitor chart rendering performance
+            Object.keys(window.interactiveReport.charts).forEach(widgetId => {
+                const chart = window.interactiveReport.charts[widgetId];
+                chart.options.onComplete = function() {
+                    console.log(`Chart ${widgetId} rendered`);
+                };
+            });
+        });
+    </script>
+</body>
+</html>

@@ -473,6 +473,57 @@ def create_completeness_rule(table_name: str, required_columns: List[str], sever
     )
 
 
+@dataclass
+class RuleBatch:
+    """Represents a batch of rules that can be executed together for optimization."""
+
+    rules: List[BusinessRule]
+    max_size: int = 10
+
+    def __post_init__(self):
+        """Validate batch configuration."""
+        if not self.rules:
+            raise ValueError("RuleBatch cannot be empty")
+        if len(self.rules) > self.max_size:
+            raise ValueError(f"Batch size {len(self.rules)} exceeds maximum {self.max_size}")
+
+    @property
+    def size(self) -> int:
+        """Get the number of rules in this batch."""
+        return len(self.rules)
+
+    @property
+    def rule_ids(self) -> List[str]:
+        """Get list of rule IDs in this batch."""
+        return [rule.rule_id for rule in self.rules]
+
+    def can_add_rule(self, rule: BusinessRule) -> bool:
+        """Check if a rule can be added to this batch."""
+        if self.size >= self.max_size:
+            return False
+
+        # Check if rule is compatible with existing rules in batch
+        # For now, rules are compatible if they target the same tables
+        if not self.rules:
+            return True
+
+        existing_tables = set()
+        for existing_rule in self.rules:
+            existing_tables.update(existing_rule.target_tables or [])
+
+        new_tables = set(rule.target_tables or [])
+
+        # Compatible if they share at least one table or both have no specific tables
+        return bool(existing_tables.intersection(new_tables)) or (not existing_tables and not new_tables)
+
+    def add_rule(self, rule: BusinessRule) -> bool:
+        """Add a rule to this batch if possible."""
+        if self.can_add_rule(rule):
+            self.rules.append(rule)
+            return True
+        return False
+
+
 # Export all model classes and utility functions
 __all__ = [
     # Enums
@@ -487,6 +538,7 @@ __all__ = [
     'ValidationContext',
     'BusinessRule',
     'RuleSet',
+    'RuleBatch',
     'ValidationSummary',
     
     # Pydantic models

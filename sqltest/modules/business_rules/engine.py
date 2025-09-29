@@ -18,6 +18,7 @@ from .models import (
     RuleResult,
     RuleViolation,
     RuleStatus,
+    RuleBatch,
     RuleSeverity,
     ValidationContext,
     ValidationSummary,
