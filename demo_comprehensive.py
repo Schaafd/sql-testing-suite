@@ -114,8 +114,8 @@ def demo_business_rules(sales_data, customer_data, product_data):
                 rule_id="sales_amount_validation",
                 name="Sales Amount Validation",
                 description="Sales amount must be positive and within reasonable range",
-                rule_type=RuleType.VALIDATION,
-                severity=SeverityLevel.HIGH,
+                rule_type=RuleType.DATA_QUALITY,
+                severity=SeverityLevel.ERROR,
                 expression="sales_amount > 0 AND sales_amount < 100000",
                 target_tables=["sales_data"]
             ),
@@ -123,8 +123,8 @@ def demo_business_rules(sales_data, customer_data, product_data):
                 rule_id="customer_age_check",
                 name="Customer Age Validation",
                 description="Customer age must be between 18 and 120",
-                rule_type=RuleType.VALIDATION,
-                severity=SeverityLevel.MEDIUM,
+                rule_type=RuleType.VALIDITY,
+                severity=SeverityLevel.WARNING,
                 expression="age >= 18 AND age <= 120",
                 target_tables=["customer_data"]
             ),
@@ -132,8 +132,8 @@ def demo_business_rules(sales_data, customer_data, product_data):
                 rule_id="stock_reorder_alert",
                 name="Stock Reorder Alert",
                 description="Alert when product stock is below 10 units",
-                rule_type=RuleType.ALERT,
-                severity=SeverityLevel.LOW,
+                rule_type=RuleType.BUSINESS_LOGIC,
+                severity=SeverityLevel.INFO,
                 expression="stock_quantity < 10",
                 target_tables=["product_data"]
             )
