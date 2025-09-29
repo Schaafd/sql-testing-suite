@@ -104,42 +104,44 @@ def demo_business_rules(sales_data, customer_data, product_data):
 
     try:
         from sqltest.modules.business_rules import BusinessRuleEngine
-        from sqltest.modules.business_rules.models import BusinessRule, RuleType, RuleSeverity as SeverityLevel
+        from sqltest.modules.business_rules.models import BusinessRule, RuleType, RuleSeverity, ValidationScope
 
         print_step("Initializing Business Rules Engine")
 
         # Create business rules
         rules = [
             BusinessRule(
-                rule_id="sales_amount_validation",
                 name="Sales Amount Validation",
                 description="Sales amount must be positive and within reasonable range",
                 rule_type=RuleType.DATA_QUALITY,
-                severity=SeverityLevel.ERROR,
-                expression="sales_amount > 0 AND sales_amount < 100000",
-                target_tables=["sales_data"]
+                severity=RuleSeverity.ERROR,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT COUNT(*) as violation_count FROM sales_data WHERE sales_amount <= 0 OR sales_amount >= 100000"
             ),
             BusinessRule(
-                rule_id="customer_age_check",
                 name="Customer Age Validation",
                 description="Customer age must be between 18 and 120",
                 rule_type=RuleType.VALIDITY,
-                severity=SeverityLevel.WARNING,
-                expression="age >= 18 AND age <= 120",
-                target_tables=["customer_data"]
+                severity=RuleSeverity.WARNING,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT COUNT(*) as violation_count FROM customer_data WHERE age < 18 OR age > 120"
             ),
             BusinessRule(
-                rule_id="stock_reorder_alert",
                 name="Stock Reorder Alert",
                 description="Alert when product stock is below 10 units",
                 rule_type=RuleType.BUSINESS_LOGIC,
-                severity=SeverityLevel.INFO,
-                expression="stock_quantity < 10",
-                target_tables=["product_data"]
+                severity=RuleSeverity.INFO,
+                scope=ValidationScope.TABLE,
+                sql_query="SELECT COUNT(*) as violation_count FROM product_data WHERE stock_quantity < 10"
             )
         ]
 
-        engine = BusinessRuleEngine()
+        # For demo purposes, create a mock connection manager
+        class MockConnectionManager:
+            def execute_query(self, query: str):
+                return []
+
+        engine = BusinessRuleEngine(MockConnectionManager())
 
         print_step("Executing Business Rules", "Running validation across all datasets")
 
@@ -155,29 +157,29 @@ def demo_business_rules(sales_data, customer_data, product_data):
         for rule in rules:
             print(f"   🔍 Executing: {rule.name}")
             # Simulate rule execution (actual implementation would run the expressions)
-            if rule.rule_id == "sales_amount_validation":
+            if rule.name == "Sales Amount Validation":
                 violations = len(sales_data[sales_data['sales_amount'] < 0])
                 result = {
-                    'rule_id': rule.rule_id,
+                    'rule_id': rule.name,
                     'rule_name': rule.name,
                     'violations': violations,
                     'severity': rule.severity.value,
                     'status': 'PASSED' if violations == 0 else 'FAILED'
                 }
-            elif rule.rule_id == "customer_age_check":
+            elif rule.name == "Customer Age Validation":
                 valid_ages = customer_data['age'].dropna()
                 violations = len(valid_ages[(valid_ages < 18) | (valid_ages > 120)])
                 result = {
-                    'rule_id': rule.rule_id,
+                    'rule_id': rule.name,
                     'rule_name': rule.name,
                     'violations': violations,
                     'severity': rule.severity.value,
                     'status': 'PASSED' if violations == 0 else 'FAILED'
                 }
-            elif rule.rule_id == "stock_reorder_alert":
+            elif rule.name == "Stock Reorder Alert":
                 violations = len(product_data[product_data['stock_quantity'] < 10])
                 result = {
-                    'rule_id': rule.rule_id,
+                    'rule_id': rule.name,
                     'rule_name': rule.name,
                     'violations': violations,
                     'severity': rule.severity.value,
