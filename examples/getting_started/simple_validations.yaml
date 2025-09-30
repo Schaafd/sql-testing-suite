@@ -1,0 +1,72 @@
+# Simple Field Validation Example
+# Basic validation rules to get started
+
+field_validations:
+  # Users table validations
+  - table: users
+    validations:
+      # Email validation
+      - column: email
+        rules:
+          - type: not_null
+            severity: ERROR
+            message: "Email is required"
+
+          - type: regex
+            pattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            severity: ERROR
+            message: "Email must be valid format"
+
+          - type: unique
+            severity: ERROR
+            message: "Email must be unique"
+
+      # Username validation
+      - column: username
+        rules:
+          - type: not_null
+            severity: ERROR
+
+          - type: unique
+            severity: ERROR
+
+          - type: length
+            min: 3
+            max: 50
+            severity: ERROR
+            message: "Username must be 3-50 characters"
+
+      # Age validation (if exists)
+      - column: age
+        rules:
+          - type: range
+            min: 18
+            max: 120
+            severity: WARNING
+            message: "Age should be between 18 and 120"
+
+  # Products table validations
+  - table: products
+    validations:
+      # Price validation
+      - column: price
+        rules:
+          - type: not_null
+            severity: ERROR
+
+          - type: range
+            min: 0.01
+            max: 999999.99
+            severity: ERROR
+            message: "Price must be positive and reasonable"
+
+      # Stock validation
+      - column: stock_quantity
+        rules:
+          - type: not_null
+            severity: ERROR
+
+          - type: range
+            min: 0
+            severity: ERROR
+            message: "Stock quantity cannot be negative"

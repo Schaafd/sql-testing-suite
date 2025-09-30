@@ -1,0 +1,184 @@
+# Enterprise Database Configuration Example
+# Production-ready configuration with advanced features
+
+databases:
+  # Production database with read replicas
+  production:
+    type: postgresql
+    host: primary.db.example.com
+    port: 5432
+    database: production_db
+    username: app_user
+    password: ${PROD_DB_PASSWORD}
+
+    # Advanced connection pooling
+    pool_config:
+      min_connections: 10
+      max_connections: 100
+      max_overflow: 20
+      pool_recycle: 3600          # Recycle connections every hour
+      pool_pre_ping: true          # Test before using
+      max_connection_age: 7200     # Max age: 2 hours
+      pool_timeout: 30
+      health_check_interval: 60
+      connection_probe_query: "SELECT 1"
+      enable_connection_events: true
+      pool_reset_on_return: true
+
+    # Query result caching
+    caching:
+      enabled: true
+      max_size_mb: 500
+      default_ttl_seconds: 600
+      strategy: SMART              # Adaptive caching strategy
+      eviction_policy: SMART       # Smart eviction
+
+    # Read replicas for load distribution
+    replicas:
+      - host: replica1.db.example.com
+        port: 5432
+        weight: 2  # Gets 2x traffic
+
+      - host: replica2.db.example.com
+        port: 5432
+        weight: 2
+
+      - host: replica3.db.example.com
+        port: 5432
+        weight: 1  # Backup replica
+
+    # Query routing
+    routing_strategy: LEAST_RESPONSE_TIME  # Route to fastest replica
+
+    # Automatic failover
+    failover:
+      enabled: true
+      health_check_interval: 30
+      max_retries: 3
+      retry_delay_seconds: 1
+      auto_promote_replica: true
+
+  # Analytics database (Snowflake)
+  analytics:
+    type: snowflake
+    account: xy12345
+    warehouse: ANALYTICS_WH
+    database: ANALYTICS_DB
+    schema: PUBLIC
+    username: analyst_user
+    password: ${SNOWFLAKE_PASSWORD}
+
+    options:
+      role: ANALYST
+      authenticator: snowflake
+      region: us-east-1
+
+    pool_config:
+      min_connections: 2
+      max_connections: 20
+
+    caching:
+      enabled: true
+      max_size_mb: 200
+      default_ttl_seconds: 1800  # 30 minutes for analytics
+      strategy: FREQUENCY
+
+# Transaction management
+transactions:
+  default_timeout_seconds: 300
+  enable_distributed: true
+
+  two_phase_commit:
+    enabled: true
+    prepare_timeout_seconds: 60
+    commit_timeout_seconds: 60
+
+  enable_savepoints: true
+  max_savepoints_per_transaction: 10
+  isolation_level: READ_COMMITTED
+
+  audit_logging:
+    enabled: true
+    log_file: /var/log/sqltest/transactions.log
+    log_level: INFO
+
+# Testing configuration
+testing:
+  default_timeout_seconds: 30
+  default_parallel_execution: true
+  default_max_workers: 8
+
+  isolation:
+    auto_rollback: true
+    use_transactions: true
+    cleanup_on_failure: true
+
+  coverage:
+    enabled: true
+    track_tables: true
+    track_queries: true
+    min_coverage_percent: 80.0
+
+  reporting:
+    generate_html: true
+    generate_junit_xml: true
+    generate_json: true
+    output_directory: ./test_reports/
+
+# Reporting and scheduling
+reporting:
+  output_directory: ./reports/
+
+  formats:
+    - html
+    - json
+
+  schedules:
+    # Daily quality report
+    - name: "Daily Quality Report"
+      enabled: true
+      frequency: daily
+      time: "09:00"
+      timezone: "America/New_York"
+      report_type: executive
+
+      email:
+        enabled: true
+        recipients:
+          - devteam@example.com
+          - qa@example.com
+        subject: "Daily Data Quality Report - {{date}}"
+
+        smtp:
+          host: smtp.gmail.com
+          port: 587
+          use_tls: true
+          username: reports@example.com
+          password: ${SMTP_PASSWORD}
+
+      file:
+        enabled: true
+        output_dir: ./reports/daily/
+        filename_template: "quality_report_{{date}}.html"
+        format: html
+
+    # Weekly executive summary
+    - name: "Weekly Executive Summary"
+      enabled: true
+      frequency: weekly
+      day: monday
+      time: "08:00"
+      report_type: executive
+
+      email:
+        enabled: true
+        recipients:
+          - executives@example.com
+        subject: "Weekly Data Quality Summary"
+
+        smtp:
+          host: smtp.gmail.com
+          port: 587
+          use_tls: true
+          username: reports@example.com
+          password: ${SMTP_PASSWORD}

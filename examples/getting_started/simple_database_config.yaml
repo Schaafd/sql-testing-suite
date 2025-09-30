@@ -1,0 +1,27 @@
+# Simple Database Configuration Example
+# This is a basic configuration to get started with SQLTest Pro
+
+databases:
+  # Local development database
+  local:
+    type: sqlite
+    database: ./test_database.db
+    # SQLite doesn't require host, port, username, or password
+
+  # PostgreSQL development database
+  dev:
+    type: postgresql
+    host: localhost
+    port: 5432
+    database: myapp_dev
+    username: dev_user
+    password: ${DEV_DB_PASSWORD}  # Use environment variable
+
+    # Basic connection pool
+    pool_config:
+      min_connections: 2
+      max_connections: 10
+      pool_pre_ping: true  # Test connection before using
+
+# Environment variables to set:
+# export DEV_DB_PASSWORD='your_password_here'

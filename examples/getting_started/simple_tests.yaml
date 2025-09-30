@@ -1,0 +1,52 @@
+# Simple Unit Tests Example
+# Basic test cases to get started with SQL testing
+
+unit_tests:
+  # First test suite
+  - test_suite: "Getting Started Tests"
+    database: local
+    parallel_execution: false  # Run sequentially for learning
+
+    tests:
+      # Test 1: Basic SELECT query
+      - name: "Test: Database connection works"
+        priority: CRITICAL
+        test:
+          query: "SELECT 1 as result"
+          assertions:
+            - type: row_count
+              expected: 1
+            - type: equals
+              column: result
+              expected: 1
+
+      # Test 2: Check table exists (example)
+      - name: "Test: Users table is accessible"
+        test:
+          query: "SELECT COUNT(*) as count FROM users"
+          assertions:
+            - type: not_empty
+            - type: row_count
+              expected: 1
+
+      # Test 3: Simple data validation
+      - name: "Test: All users have valid email format"
+        test:
+          query: |
+            SELECT COUNT(*) as invalid_count
+            FROM users
+            WHERE email NOT LIKE '%@%.%'
+          assertions:
+            - type: equals
+              column: invalid_count
+              expected: 0
+              message: "All emails should be valid"
+
+      # Test 4: Performance test
+      - name: "Test: User lookup is fast"
+        test:
+          query: "SELECT * FROM users WHERE id = 1"
+          assertions:
+            - type: execution_time
+              expected: 100  # milliseconds
+              message: "Query should execute in under 100ms"

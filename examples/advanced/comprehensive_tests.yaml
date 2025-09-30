@@ -1,0 +1,267 @@
+# Comprehensive Test Suite Example
+# Advanced testing patterns and techniques
+
+unit_tests:
+  # Suite 1: User Management - Happy Path
+  - test_suite: "User Management - Happy Path"
+    database: production
+    parallel_execution: true
+    max_workers: 4
+
+    setup_suite:
+      - "CREATE TEMP TABLE test_users AS SELECT * FROM users LIMIT 0"
+      - "CREATE TEMP TABLE test_audit_log AS SELECT * FROM audit_log LIMIT 0"
+
+    teardown_suite:
+      - "DROP TABLE IF EXISTS test_users"
+      - "DROP TABLE IF EXISTS test_audit_log"
+
+    tests:
+      - name: "Test: Create user with valid data"
+        priority: CRITICAL
+        tags: [integration, critical, smoke]
+
+        setup:
+          - "DELETE FROM test_users WHERE username = 'testuser'"
+
+        test:
+          query: |
+            INSERT INTO test_users (username, email, created_at)
+            VALUES ('testuser', 'test@example.com', NOW())
+            RETURNING user_id, username, email
+
+          assertions:
+            - type: row_count
+              expected: 1
+
+            - type: columns_exist
+              columns: [user_id, username, email]
+
+            - type: not_null
+              columns: [user_id, username, email]
+
+        teardown:
+          - "DELETE FROM test_users WHERE username = 'testuser'"
+
+      - name: "Test: User creation updates audit log"
+        priority: HIGH
+        tags: [integration, audit]
+
+        test:
+          query: |
+            WITH new_user AS (
+              INSERT INTO test_users (username, email, created_at)
+              VALUES ('audituser', 'audit@example.com', NOW())
+              RETURNING user_id
+            )
+            INSERT INTO test_audit_log (user_id, action, timestamp)
+            SELECT user_id, 'USER_CREATED', NOW() FROM new_user
+            RETURNING *
+
+          assertions:
+            - type: row_count
+              expected: 1
+
+            - type: column_value
+              column: action
+              expected: USER_CREATED
+
+  # Suite 2: Error Handling Tests
+  - test_suite: "User Management - Error Handling"
+    database: production
+
+    tests:
+      - name: "Test: Duplicate email is rejected"
+        priority: HIGH
+        tags: [integration, validation]
+
+        setup:
+          - "INSERT INTO test_users (username, email) VALUES ('existing', 'duplicate@example.com')"
+
+        test:
+          query: |
+            INSERT INTO test_users (username, email)
+            VALUES ('newuser', 'duplicate@example.com')
+            ON CONFLICT (email) DO NOTHING
+            RETURNING *
+
+          assertions:
+            - type: row_count
+              expected: 0
+              message: "Duplicate email should be rejected"
+
+      - name: "Test: Invalid email format is rejected"
+        priority: HIGH
+        tags: [integration, validation]
+
+        test:
+          query: |
+            SELECT
+              CASE
+                WHEN email ~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                THEN true
+                ELSE false
+              END as valid
+            FROM (SELECT 'invalid-email' as email) t
+
+          assertions:
+            - type: equals
+              column: valid
+              expected: false
+
+  # Suite 3: Performance Tests
+  - test_suite: "Performance Tests"
+    database: production
+    parallel_execution: true
+
+    tests:
+      - name: "Test: User lookup by ID is fast"
+        priority: HIGH
+        tags: [performance, critical]
+
+        test:
+          query: "SELECT * FROM users WHERE user_id = 1"
+
+          assertions:
+            - type: execution_time
+              expected: 10  # milliseconds
+              message: "Indexed lookup should be < 10ms"
+
+      - name: "Test: User search by email is fast"
+        priority: HIGH
+        tags: [performance]
+
+        test:
+          query: "SELECT * FROM users WHERE email = 'test@example.com'"
+
+          assertions:
+            - type: execution_time
+              expected: 50  # milliseconds
+              message: "Indexed email search should be < 50ms"
+
+      - name: "Test: User list pagination is efficient"
+        priority: MEDIUM
+        tags: [performance]
+
+        test:
+          query: |
+            SELECT * FROM users
+            ORDER BY created_at DESC
+            LIMIT 100 OFFSET 0
+
+          assertions:
+            - type: execution_time
+              expected: 100  # milliseconds
+
+            - type: row_count
+              expected: 100
+              message: "Should return full page of results"
+
+  # Suite 4: Data Integrity Tests
+  - test_suite: "Data Integrity Tests"
+    database: production
+
+    tests:
+      - name: "Test: No orphaned orders exist"
+        priority: CRITICAL
+        tags: [integrity, critical]
+
+        test:
+          query: |
+            SELECT COUNT(*) as orphan_count
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.user_id
+            WHERE u.user_id IS NULL
+
+          assertions:
+            - type: equals
+              column: orphan_count
+              expected: 0
+              message: "All orders must have valid user references"
+
+      - name: "Test: Order totals match line items"
+        priority: HIGH
+        tags: [integrity, financial]
+
+        test:
+          query: |
+            SELECT
+              o.order_id,
+              o.total_amount,
+              SUM(oi.quantity * oi.unit_price) as calculated_total
+            FROM orders o
+            JOIN order_items oi ON o.order_id = oi.order_id
+            GROUP BY o.order_id, o.total_amount
+            HAVING ABS(o.total_amount - SUM(oi.quantity * oi.unit_price)) > 0.01
+
+          assertions:
+            - type: row_count
+              expected: 0
+              message: "Order totals must match line item sums"
+
+  # Suite 5: Transaction Tests
+  - test_suite: "Transaction Tests"
+    database: production
+
+    tests:
+      - name: "Test: Transaction rollback works correctly"
+        priority: CRITICAL
+        tags: [transaction, critical]
+
+        test:
+          query: |
+            BEGIN;
+              INSERT INTO test_users (username, email)
+              VALUES ('rollback_test', 'rollback@example.com');
+
+              SELECT COUNT(*) as count_before_rollback
+              FROM test_users
+              WHERE username = 'rollback_test';
+            ROLLBACK;
+
+            SELECT COUNT(*) as count_after_rollback
+            FROM test_users
+            WHERE username = 'rollback_test';
+
+          assertions:
+            - type: equals
+              column: count_after_rollback
+              expected: 0
+              message: "User should not exist after rollback"
+
+# Fixtures for tests
+fixtures:
+  - name: "sample_users"
+    table: test_users
+    cleanup: true
+    data:
+      - username: "alice"
+        email: "alice@example.com"
+        active: true
+        created_at: "2024-01-01 00:00:00"
+
+      - username: "bob"
+        email: "bob@example.com"
+        active: true
+        created_at: "2024-01-02 00:00:00"
+
+      - username: "charlie"
+        email: "charlie@example.com"
+        active: false
+        created_at: "2024-01-03 00:00:00"
+
+  - name: "sample_orders"
+    table: test_orders
+    cleanup: true
+    depends_on:
+      - sample_users
+    data:
+      - user_id: 1  # alice
+        total_amount: 100.00
+        status: "completed"
+        order_date: "2024-01-10"
+
+      - user_id: 2  # bob
+        total_amount: 250.50
+        status: "pending"
+        order_date: "2024-01-11"
