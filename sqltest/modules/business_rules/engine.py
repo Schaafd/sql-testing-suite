@@ -187,14 +187,31 @@ class BusinessRuleEngine:
             if not adapter:
                 raise ValidationError(f"Database adapter not found: {context.database_name}")
             
-            # Execute the rule query with timeout
+            # Execute the rule query with streaming support
             start_time = time.time()
-            result = adapter.execute_query(rule.sql_query, timeout=timeout)
-            result_df = result.data
+            chunk_size = int(rule.parameters.get('chunk_size', 5000)) if rule.parameters else 5000
+            result = adapter.execute_query(
+                rule.sql_query,
+                timeout=timeout,
+                stream_results=True,
+                chunk_size=chunk_size,
+            )
             query_time = time.time() - start_time
-            
-            # Process results
-            violations = self._process_sql_results(rule, result_df, context)
+
+            violations: List[RuleViolation] = []
+            rows_evaluated = 0
+
+            iterator = result.iter_chunks()
+            try:
+                for chunk in iterator:
+                    if chunk.empty:
+                        continue
+                    rows_evaluated += len(chunk)
+                    violations.extend(self._process_sql_results(rule, chunk, context))
+            finally:
+                close_fn = getattr(iterator, 'close', None)
+                if callable(close_fn):
+                    close_fn()
             
             # Determine rule status
             passed = len(violations) == 0
@@ -234,10 +251,10 @@ class BusinessRuleEngine:
                 passed=passed,
                 message=f"Rule executed successfully" if passed else f"Rule failed with {len(violations)} violations",
                 violations=violations,
-                rows_evaluated=len(result_df),
+                rows_evaluated=rows_evaluated,
                 context={
                     "query_execution_time_ms": query_time * 1000,
-                    "result_rows": len(result_df)
+                    "result_rows": rows_evaluated
                 }
             )
             

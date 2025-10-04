@@ -1,6 +1,6 @@
 """Field validation module for SQLTest Pro."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import pandas as pd
 
 from ...db.connection import ConnectionManager
@@ -35,6 +35,9 @@ from .config import (
 )
 
 
+VALIDATION_CHUNK_SIZE = 5000
+
+
 class TableFieldValidator:
     """High-level interface for field validation integrated with database operations."""
     
@@ -48,6 +51,7 @@ class TableFieldValidator:
         self.connection_manager = connection_manager
         self.validator = FieldValidator(strict_mode=strict_mode)
         self.rule_sets = {}
+        self._chunk_size = VALIDATION_CHUNK_SIZE
     
     def load_validation_rules(self, config_path: str) -> None:
         """Load validation rules from a YAML configuration file.
@@ -102,12 +106,16 @@ class TableFieldValidator:
                 # Default to all columns
                 columns_to_validate = ['*']
         
-        column_list = ", ".join(columns_to_validate) if columns_to_validate != ['*'] else "*"
+        columns_to_validate = list(dict.fromkeys(columns_to_validate))
+        if any(col == '*' or col.endswith('.*') for col in columns_to_validate):
+            columns_to_validate = ['*']
+
+        column_list = "*" if columns_to_validate == ['*'] else ", ".join(columns_to_validate)
         query = f"SELECT {column_list} FROM {table_name}"
-        
+
         if where_clause:
             query += f" WHERE {where_clause}"
-        
+
         if sample_rows:
             # Add database-specific LIMIT clause
             adapter = self.connection_manager.get_adapter(database_name)
@@ -118,38 +126,34 @@ class TableFieldValidator:
             else:
                 query += f" LIMIT {sample_rows}"
         
-        # Execute query and get data
         try:
-            result = self.connection_manager.execute_query(query, db_name=database_name)
-            
-            if result.is_empty:
-                raise ValidationError(f"No data found in table '{table_name}'")
-                
-            # Prepare column rules mapping
-            column_rules = {}
-            
-            if columns_to_validate == ['*']:
-                # Apply all rules to all columns
-                for column in result.data.columns:
-                    column_rules[column] = rule_set.rules.copy()
-            else:
-                # Apply rules to specific columns
-                for column in columns_to_validate:
-                    if column in result.data.columns:
+            def prepare_column_rules(available_columns: List[str]) -> Tuple[Dict[str, List[ValidationRule]], List[FieldValidationResult]]:
+                column_rules: Dict[str, List[ValidationRule]] = {}
+                missing_results: List[FieldValidationResult] = []
+
+                if columns_to_validate == ['*']:
+                    for column in available_columns:
                         column_rules[column] = rule_set.rules.copy()
-            
-            # Validate the data
-            table_result = self.validator.validate_dataframe(
-                df=result.data,
-                column_rules=column_rules,
-                table_name=table_name
+                    return column_rules, missing_results
+
+                available_set = set(available_columns)
+                for column in columns_to_validate:
+                    if column in available_set:
+                        column_rules[column] = rule_set.rules.copy()
+                    else:
+                        missing_results.append(self._create_missing_column_result(column, table_name))
+                return column_rules, missing_results
+
+            table_result = self._stream_validate(
+                query=query,
+                database_name=database_name,
+                table_name=table_name,
+                prepare_column_rules=prepare_column_rules,
             )
-            
-            # Set database name
+
             table_result.database_name = database_name or self.connection_manager.config.default_database
-            
             return table_result
-            
+
         except DatabaseError:
             raise
         except Exception as e:
@@ -182,33 +186,135 @@ class TableFieldValidator:
         
         # Execute query
         try:
-            result = self.connection_manager.execute_query(query, db_name=database_name)
-            
-            if result.is_empty:
-                raise ValidationError("Query returned no results to validate")
-            
-            # Apply rules to all columns in the result
-            column_rules = {}
-            for column in result.data.columns:
-                column_rules[column] = rule_set.rules.copy()
-            
-            # Validate the data
-            table_result = self.validator.validate_dataframe(
-                df=result.data,
-                column_rules=column_rules,
-                table_name="query_result"
+            def prepare_column_rules(available_columns: List[str]) -> Tuple[Dict[str, List[ValidationRule]], List[FieldValidationResult]]:
+                column_rules = {column: rule_set.rules.copy() for column in available_columns}
+                return column_rules, []
+
+            table_result = self._stream_validate(
+                query=query,
+                database_name=database_name,
+                table_name="query_result",
+                prepare_column_rules=prepare_column_rules,
             )
-            
-            # Set database name
+
             table_result.database_name = database_name or self.connection_manager.config.default_database
-            
             return table_result
-            
+
         except DatabaseError:
             raise
         except Exception as e:
             raise ValidationError(f"Failed to validate query results: {e}") from e
-    
+
+    def _stream_validate(
+        self,
+        *,
+        query: str,
+        database_name: Optional[str],
+        table_name: str,
+        prepare_column_rules: Callable[[List[str]], Tuple[Dict[str, List[ValidationRule]], List[FieldValidationResult]]]
+    ) -> TableValidationResult:
+        """Stream query results and validate them chunk by chunk."""
+        result = self.connection_manager.execute_query(
+            query,
+            db_name=database_name,
+            stream_results=True,
+            chunk_size=self._chunk_size,
+        )
+
+        iterator = result.iter_chunks()
+        aggregate_results: Dict[str, FieldValidationResult] = {}
+        rows_processed = 0
+        column_rules: Optional[Dict[str, List[ValidationRule]]] = None
+
+        try:
+            for chunk in iterator:
+                if chunk.empty:
+                    continue
+
+                if column_rules is None:
+                    column_rules, missing_results = prepare_column_rules(chunk.columns.tolist())
+                    for missing in missing_results:
+                        aggregate_results[missing.column_name] = missing
+
+                if not column_rules:
+                    # Nothing to validate for this dataset
+                    rows_processed += len(chunk)
+                    continue
+
+                chunk.index = range(rows_processed, rows_processed + len(chunk))
+                rows_processed += len(chunk)
+
+                chunk_result = self.validator.validate_dataframe(
+                    df=chunk,
+                    column_rules=column_rules,
+                    table_name=table_name,
+                )
+                self._merge_field_results(aggregate_results, chunk_result.field_results)
+
+        finally:
+            close_fn = getattr(iterator, 'close', None)
+            if callable(close_fn):
+                close_fn()
+
+        if rows_processed == 0:
+            raise ValidationError(f"No data found for validation on '{table_name}'")
+
+        if column_rules is None:
+            column_rules, missing_results = prepare_column_rules([])
+            for missing in missing_results:
+                aggregate_results[missing.column_name] = missing
+
+        field_results = list(aggregate_results.values())
+        field_results.sort(key=lambda fr: fr.column_name)
+
+        return TableValidationResult(
+            table_name=table_name,
+            database_name="",
+            field_results=field_results,
+        )
+
+    def _merge_field_results(
+        self,
+        accumulator: Dict[str, FieldValidationResult],
+        chunk_results: List[FieldValidationResult]
+    ) -> None:
+        for field_result in chunk_results:
+            existing = accumulator.get(field_result.column_name)
+            if existing is None:
+                accumulator[field_result.column_name] = FieldValidationResult(
+                    column_name=field_result.column_name,
+                    table_name=field_result.table_name,
+                    total_rows=field_result.total_rows,
+                    validation_results=list(field_result.validation_results),
+                    passed_rules=field_result.passed_rules,
+                    failed_rules=field_result.failed_rules,
+                    warnings=field_result.warnings,
+                )
+            else:
+                existing.total_rows += field_result.total_rows
+                existing.validation_results.extend(field_result.validation_results)
+                existing.passed_rules += field_result.passed_rules
+                existing.failed_rules += field_result.failed_rules
+                existing.warnings += field_result.warnings
+
+    @staticmethod
+    def _create_missing_column_result(column_name: str, table_name: str) -> FieldValidationResult:
+        error_result = ValidationResult(
+            rule_name="column_exists",
+            column_name=column_name,
+            passed=False,
+            level=ValidationLevel.ERROR,
+            message=f"Column '{column_name}' not found in data",
+        )
+
+        return FieldValidationResult(
+            column_name=column_name,
+            table_name=table_name,
+            total_rows=0,
+            validation_results=[error_result],
+            failed_rules=1,
+        )
+
     def validate_column_data(
         self,
         table_name: str,

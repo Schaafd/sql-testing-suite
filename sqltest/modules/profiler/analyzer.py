@@ -57,7 +57,14 @@ class DataAnalyzer:
         """
         self.sample_size = sample_size
     
-    def analyze_column(self, data: pd.Series, column_name: str) -> ColumnStatistics:
+    def analyze_column(
+        self,
+        data: pd.Series,
+        column_name: str,
+        *,
+        total_rows: Optional[int] = None,
+        aggregated: Optional[Dict[str, Any]] = None,
+    ) -> ColumnStatistics:
         """Analyze a single column and generate statistics.
         
         Args:
@@ -67,10 +74,16 @@ class DataAnalyzer:
         Returns:
             ColumnStatistics object with analysis results
         """
-        total_rows = len(data)
+        observed_rows = len(data)
+        population_total = total_rows if total_rows is not None else observed_rows
         non_null_data = data.dropna()
-        non_null_count = len(non_null_data)
-        null_count = total_rows - non_null_count
+
+        if aggregated and aggregated.get('count') is not None:
+            non_null_count = int(aggregated['count'])
+        else:
+            non_null_count = len(non_null_data)
+
+        null_count = max(population_total - non_null_count, 0)
         
         # Basic statistics
         unique_count = data.nunique()
@@ -79,7 +92,7 @@ class DataAnalyzer:
         stats = ColumnStatistics(
             column_name=column_name,
             data_type=str(data.dtype),
-            total_rows=total_rows,
+            total_rows=population_total,
             non_null_count=non_null_count,
             null_count=null_count,
             unique_count=unique_count,
@@ -146,6 +159,14 @@ class DataAnalyzer:
                 for val, count in least_frequent.items()
             ]
         
+        if aggregated:
+            if aggregated.get('min') is not None:
+                stats.min_value = aggregated['min']
+            if aggregated.get('max') is not None:
+                stats.max_value = aggregated['max']
+            if aggregated.get('histogram'):
+                stats.histogram = aggregated['histogram']
+
         return stats
     
     def _detect_patterns(self, str_data: pd.Series) -> List[Dict[str, Any]]:
@@ -191,7 +212,9 @@ class DataAnalyzer:
         df: pd.DataFrame, 
         table_name: str,
         database_name: str,
-        schema_name: Optional[str] = None
+        schema_name: Optional[str] = None,
+        total_rows: Optional[int] = None,
+        aggregate_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> TableProfile:
         """Profile a complete DataFrame.
         
@@ -207,10 +230,16 @@ class DataAnalyzer:
         start_time = datetime.now()
         
         # Analyze each column
+        population_total = total_rows if total_rows is not None else len(df)
         column_stats = {}
         for column_name in df.columns:
             try:
-                column_stats[column_name] = self.analyze_column(df[column_name], column_name)
+                column_stats[column_name] = self.analyze_column(
+                    df[column_name],
+                    column_name,
+                    total_rows=population_total,
+                    aggregated=(aggregate_metadata or {}).get(column_name)
+                )
             except Exception as e:
                 # Log error but continue with other columns
                 print(f"Warning: Failed to analyze column '{column_name}': {e}")
@@ -225,7 +254,7 @@ class DataAnalyzer:
             table_name=table_name,
             schema_name=schema_name,
             database_name=database_name,
-            total_rows=len(df),
+            total_rows=population_total,
             total_columns=len(df.columns),
             profile_timestamp=start_time,
             execution_time=execution_time,
@@ -248,7 +277,8 @@ class DataAnalyzer:
         self, 
         df: pd.DataFrame, 
         query: str,
-        execution_time: float
+        execution_time: float,
+        total_rows: Optional[int] = None
     ) -> QueryProfile:
         """Profile the results of a SQL query.
         
@@ -267,9 +297,15 @@ class DataAnalyzer:
         
         # Analyze each column
         column_stats = {}
+        population_total = total_rows if total_rows is not None else len(df)
+
         for column_name in df.columns:
             try:
-                column_stats[column_name] = self.analyze_column(df[column_name], column_name)
+                column_stats[column_name] = self.analyze_column(
+                    df[column_name],
+                    column_name,
+                    total_rows=population_total
+                )
             except Exception as e:
                 print(f"Warning: Failed to analyze column '{column_name}': {e}")
                 continue
@@ -278,7 +314,7 @@ class DataAnalyzer:
             query=query,
             query_hash=query_hash,
             execution_time=execution_time,
-            rows_returned=len(df),
+            rows_returned=population_total,
             columns_returned=len(df.columns),
             profile_timestamp=start_time,
             columns=column_stats

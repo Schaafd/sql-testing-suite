@@ -42,13 +42,16 @@ class ColumnStatistics:
     
     # Pattern analysis
     patterns: Optional[List[Dict[str, Any]]] = None
-    
+
     # Most/least frequent values
     most_frequent: Optional[List[Dict[str, Any]]] = None
     least_frequent: Optional[List[Dict[str, Any]]] = None
-    
+
     # Outliers
     outliers: Optional[List[Any]] = None
+
+    # Optional histogram for numeric distributions
+    histogram: Optional[List[Dict[str, Any]]] = None
     
     def __post_init__(self):
         """Calculate derived statistics."""
