@@ -1,6 +1,6 @@
 """Database connectivity and query execution."""
 
-from sqltest.db.base import BaseAdapter, QueryResult
+from sqltest.db.base import BaseAdapter, QueryResult, AggregateSpec
 from sqltest.db.connection import (
     ConnectionManager,
     AdapterFactory,
@@ -17,6 +17,7 @@ __all__ = [
     # Base classes
     "BaseAdapter",
     "QueryResult",
+    "AggregateSpec",
     # Connection management
     "ConnectionManager",
     "AdapterFactory",

@@ -1,10 +1,10 @@
 """Database connection management and adapter factory."""
 
 import time
-from typing import Dict, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from sqltest.config.models import DatabaseConfig, DatabaseType, ConnectionPoolConfig, SQLTestConfig
-from sqltest.db.base import BaseAdapter, QueryResult
+from sqltest.db.base import BaseAdapter, QueryResult, AggregateSpec
 from sqltest.db.adapters.postgresql import PostgreSQLAdapter
 from sqltest.db.adapters.mysql import MySQLAdapter
 from sqltest.db.adapters.sqlite import SQLiteAdapter
@@ -193,21 +193,52 @@ class ConnectionManager:
         db_name: Optional[str] = None,
         fetch_results: bool = True,
         timeout: Optional[int] = None,
+        chunk_size: Optional[int] = None,
+        stream_results: bool = False,
+        result_processor: Optional[Callable[[Any], Any]] = None,
     ) -> QueryResult:
         """Execute SQL query on specified database.
-        
+
         Args:
             query: SQL query string.
             params: Query parameters.
             db_name: Database connection name.
             fetch_results: Whether to fetch result data.
             timeout: Query timeout in seconds.
-            
+            chunk_size: Number of rows per chunk when streaming.
+            stream_results: Stream rows as chunks instead of loading into memory.
+            result_processor: Optional callable invoked per chunk.
+
         Returns:
             QueryResult instance.
         """
         adapter = self.get_adapter(db_name)
-        return adapter.execute_query(query, params, fetch_results, timeout)
+        return adapter.execute_query(
+            query,
+            params,
+            fetch_results,
+            timeout,
+            chunk_size=chunk_size,
+            stream_results=stream_results,
+            result_processor=result_processor,
+        )
+
+    def compute_aggregates(
+        self,
+        table_name: str,
+        specifications: List[AggregateSpec],
+        db_name: Optional[str] = None,
+        schema: Optional[str] = None,
+        where_clause: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compute aggregates in the database using adapter capabilities."""
+        adapter = self.get_adapter(db_name)
+        return adapter.compute_aggregates(
+            table_name=table_name,
+            specifications=specifications,
+            schema=schema,
+            where_clause=where_clause,
+        )
     
     def get_table_info(
         self,
