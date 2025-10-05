@@ -11,18 +11,26 @@ This script demonstrates:
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Dict, Any
-from sqltest.modules.field_validator.models import TableValidationResult
 
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+DATA_DIR = DEMO_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+from sqltest.modules.field_validator.models import TableValidationResult
 from sqltest.modules.field_validator import TableFieldValidator, ValidationConfigLoader
 from sqltest.db.connection import ConnectionManager
 
 
 def create_sample_database():
     """Create a sample SQLite database with test data."""
-    db_path = Path("data/test_data.db")
-    db_path.parent.mkdir(exist_ok=True)
+    db_path = DATA_DIR / "field_validation.db"
     
     # Connect and create sample data
     conn = sqlite3.connect(db_path)
@@ -123,13 +131,13 @@ def main():
         
         # Step 2: Load validation configuration
         print("\n2️⃣ Loading validation configuration...")
-        config_path = Path("examples/demo/validation_rules_corrected.yaml")
-        if not config_path.exists():
-            print(f"❌ Config file not found: {config_path}")
-            return
-            
-        config_loader = ValidationConfigLoader()
-        config = config_loader.load_from_file(str(config_path))
+    config_path = PROJECT_ROOT / "examples" / "demo" / "validation_rules_corrected.yaml"
+    if not config_path.exists():
+        print(f"❌ Config file not found: {config_path}")
+        return
+
+    config_loader = ValidationConfigLoader()
+    config = config_loader.load_from_file(str(config_path))
         print(f"✓ Loaded validation config with {len(config)} rule sets")
         
         # Step 3: Setup database connection

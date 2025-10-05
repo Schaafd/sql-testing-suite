@@ -67,7 +67,7 @@ sqltest --version
 sqltest --help
 
 # Run demo
-python demo_quick.py
+python demo/demo_quick.py
 ```
 
 ## Quick Start
@@ -1188,7 +1188,7 @@ Error: Test affected database state
 - **Documentation**: [https://github.com/Schaafd/sql-testing-suite](https://github.com/Schaafd/sql-testing-suite)
 - **Issues**: [GitHub Issues](https://github.com/Schaafd/sql-testing-suite/issues)
 - **Examples**: See `examples/` directory
-- **Demos**: Run `python demo_comprehensive.py`
+- **Demos**: Run `python demo/demo_comprehensive.py`
 
 ## Next Steps
 

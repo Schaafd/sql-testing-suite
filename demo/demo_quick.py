@@ -3,7 +3,7 @@
 Quick Demo of SQLTest Pro Key Features
 
 A streamlined demonstration showing the most important capabilities.
-Run with: python demo_quick.py
+Run with: python demo/demo_quick.py
 """
 
 import pandas as pd
@@ -12,8 +12,10 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-# Add project to path
-sys.path.insert(0, str(Path(__file__).parent))
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 def main():
     print("""

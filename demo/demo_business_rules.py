@@ -7,9 +7,16 @@ import sys
 import os
 from pathlib import Path
 
-# Add the project root to the Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# Configure project and demo paths
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+DATA_DIR = DEMO_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = DEMO_ROOT / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 from sqltest.db.connection import ConnectionManager
 from sqltest.config.models import SQLTestConfig, DatabaseConfig, DatabaseType
@@ -38,12 +45,12 @@ logger = logging.getLogger(__name__)
 
 def create_demo_database():
     """Create a demo SQLite database with sample data."""
-    db_path = "demo_business_rules.db"
-    
+    db_path = DATA_DIR / "demo_business_rules.db"
+
     # Remove existing database
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    
+    if db_path.exists():
+        db_path.unlink()
+
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
@@ -371,8 +378,8 @@ def demonstrate_business_rule_validation():
                     print(f"     ... and {len(result.violations) - 3} more")
         
         # Export results
-        export_path = "demo_business_rules_results.json"
-        validator.export_results_to_json(summary, export_path)
+        export_path = OUTPUT_DIR / "demo_business_rules_results.json"
+        validator.export_results_to_json(summary, str(export_path))
         print(f"\n💾 Results exported to: {export_path}")
         
         # Test with tags filtering

@@ -10,7 +10,7 @@ This demo showcases all major capabilities implemented in Weeks 1-6:
 - Report Scheduling & Automation
 - Executive Analytics & Trend Analysis
 
-Run with: python demo_comprehensive.py
+Run with: python demo/demo_comprehensive.py
 """
 
 import os
@@ -22,9 +22,16 @@ from pathlib import Path
 import tempfile
 import time
 
-# Add the project root to Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+DATA_DIR = DEMO_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = DEMO_ROOT / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR = PROJECT_ROOT / "reports"
 
 def print_banner(title: str, subtitle: str = ""):
     """Print a styled banner for demo sections."""
@@ -50,7 +57,10 @@ def print_info(message: str):
 
 def wait_for_user():
     """Pause for user to review output."""
-    input("\n⏸️  Press Enter to continue...")
+    if sys.stdin is not None and sys.stdin.isatty():
+        input("\n⏸️  Press Enter to continue...")
+    else:
+        print("\n⏩ Skipping pause (non-interactive environment)")
 
 def create_sample_data():
     """Create comprehensive sample datasets for demo."""
@@ -678,9 +688,8 @@ def main():
     print("   ✅ Integrated Workflows - End-to-end data processing")
 
     print("\n📊 Generated Artifacts:")
-    reports_dir = Path("reports")
-    if reports_dir.exists():
-        report_files = list(reports_dir.glob("*.html"))
+    if REPORTS_DIR.exists():
+        report_files = list(REPORTS_DIR.glob("*.html"))
         for report_file in report_files[-3:]:  # Show last 3 reports
             print(f"   📄 {report_file.name}")
 

@@ -1,7 +1,7 @@
 databases:
   demo_db:
     type: sqlite
-    path: demo_test.db
+    path: demo/data/demo_test.db
 
 default_database: demo_db
 

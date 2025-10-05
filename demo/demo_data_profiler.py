@@ -14,10 +14,21 @@ This script demonstrates:
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime, timedelta
 import random
+
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+DATA_DIR = DEMO_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = DEMO_ROOT / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 from sqltest.modules.profiler import DataProfiler
 from sqltest.modules.profiler.models import TableProfile
@@ -25,8 +36,7 @@ from sqltest.modules.profiler.models import TableProfile
 
 def create_sample_dataset():
     """Create a more comprehensive sample dataset for profiling demonstration."""
-    db_path = Path("data/profiler_test_data.db")
-    db_path.parent.mkdir(exist_ok=True)
+    db_path = DATA_DIR / "profiler_test_data.db"
     
     # Connect and create sample data
     conn = sqlite3.connect(db_path)
@@ -361,8 +371,8 @@ def main():
         
         # Step 8: Save results
         print("\n8️⃣ Saving profiling results...")
-        results_path = Path("reports/data_profiling_results.json")
-        results_path.parent.mkdir(exist_ok=True)
+        results_path = OUTPUT_DIR / "data_profiling_results.json"
+        results_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Convert to dict for JSON serialization
         import dataclasses
@@ -374,7 +384,7 @@ def main():
         print(f"✓ Table profile saved to {results_path}")
         
         # Save query profile too
-        query_results_path = Path("reports/query_profiling_results.json")
+        query_results_path = OUTPUT_DIR / "query_profiling_results.json"
         query_profile_dict = dataclasses.asdict(query_profile)
         
         with open(query_results_path, 'w') as f:

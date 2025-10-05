@@ -6,9 +6,14 @@ Test script for Business Rules YAML configuration loading
 import sys
 from pathlib import Path
 
-# Add the project root to the Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# Resolve key project paths relative to this file's location
+DEMO_TESTS_ROOT = Path(__file__).resolve().parent
+DEMO_ROOT = DEMO_TESTS_ROOT.parent
+PROJECT_ROOT = DEMO_ROOT.parent
+
+# Ensure project root is on the Python path for local execution
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from sqltest.modules.business_rules.config_loader import BusinessRuleConfigLoader
 import logging
@@ -27,13 +32,13 @@ def test_yaml_loading():
     config_loader = BusinessRuleConfigLoader()
     
     # Test loading from the sample YAML file
-    yaml_file = "sample_business_rules.yaml"
+    yaml_file = DEMO_ROOT / "sample_business_rules.yaml"
     
     try:
         print(f"\n📄 Loading configuration from: {yaml_file}")
-        
+
         # Load rule set from file
-        rule_set = config_loader.load_rule_set_from_file(yaml_file)
+        rule_set = config_loader.load_rule_set_from_file(str(yaml_file))
         
         print(f"\n✅ Successfully loaded rule set!")
         print(f"  Name: {rule_set.name}")

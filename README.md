@@ -90,14 +90,14 @@ Experience SQLTest Pro's capabilities with our interactive demonstrations:
 ### **🚀 Quick Demo (2 minutes)**
 ```bash
 # Showcase key features with sample data
-python demo_quick.py
+python demo/demo_quick.py
 ```
 **Demonstrates**: Data quality assessment, statistical profiling, business rule validation, and interactive dashboard generation.
 
 ### **🎨 CLI Interface Demo**
 ```bash
 # Explore the professional terminal interface
-python demo_cli.py
+python demo/demo_cli.py
 
 # Try the actual CLI
 python -m sqltest.cli.main --help
@@ -108,7 +108,7 @@ python -m sqltest.cli.main
 ### **🏢 Comprehensive Enterprise Demo (10 minutes)**
 ```bash
 # Complete end-to-end workflow demonstration
-python demo_comprehensive.py
+python demo/demo_comprehensive.py
 ```
 **Demonstrates**: Business rules engine, field validator, data profiler, interactive reporting, automated scheduling, and integrated workflows.
 
@@ -302,9 +302,9 @@ unit_tests:
 
 2. **Try the Interactive Demos**
    ```bash
-   python demo_quick.py          # 2-minute feature showcase
-   python demo_cli.py            # CLI interface demo
-   python demo_comprehensive.py  # Full enterprise workflow
+  python demo/demo_quick.py          # 2-minute feature showcase
+  python demo/demo_cli.py            # CLI interface demo
+  python demo/demo_comprehensive.py  # Full enterprise workflow
    ```
 
 3. **Explore the CLI**

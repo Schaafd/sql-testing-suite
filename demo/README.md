@@ -17,7 +17,7 @@ Demonstrates all major capabilities:
 
 ```bash
 # Run the comprehensive demo
-python demo_comprehensive.py
+python demo/demo_comprehensive.py
 ```
 
 **Features Demonstrated:**
@@ -41,7 +41,7 @@ Demonstrates the Rich-powered CLI:
 
 ```bash
 # Run the CLI demo
-python demo_cli.py
+python demo/demo_cli.py
 
 # Try the actual CLI
 python -m sqltest.cli.main --help

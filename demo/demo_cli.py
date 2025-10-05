@@ -5,13 +5,19 @@ SQLTest Pro CLI Demo
 This demo showcases the command-line interface capabilities
 built with Click and Rich for professional terminal interactions.
 
-Run with: python demo_cli.py
+Run with: python demo/demo_cli.py
 """
 
 import os
 import sys
 import subprocess
 from pathlib import Path
+
+DEMO_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 def print_banner():
     """Print the demo banner."""

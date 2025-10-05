@@ -7,17 +7,26 @@ Tests the complete CLI workflow for business rule validation.
 import subprocess
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
+
+# Resolve project-relative paths based on this file's location
+DEMO_TESTS_ROOT = Path(__file__).resolve().parent
+DEMO_ROOT = DEMO_TESTS_ROOT.parent
+PROJECT_ROOT = DEMO_ROOT.parent
+SAMPLE_RULE_SET = str(DEMO_ROOT / "sample_business_rules.yaml")
+DEMO_CONFIG = str(DEMO_ROOT / "test_config.yaml")
+PYTHON_BIN = sys.executable or "python"
 
 def run_cli_command(cmd: list) -> tuple:
     """Run a CLI command and return result."""
     try:
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
-            cwd="/Users/davidschaaf/projects/python_projects/sql-testing-suite"
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT)
         )
         return result.returncode, result.stdout, result.stderr
     except Exception as e:
@@ -31,7 +40,7 @@ def test_cli_business_rules_integration():
     # Test 1: CLI Help
     print("\n1️⃣  Testing CLI Help...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", "business-rules", "--help"
+        PYTHON_BIN, "-m", "sqltest.cli.main", "business-rules", "--help"
     ])
     
     if code == 0 and "Execute business rule validation" in stdout:
@@ -43,10 +52,10 @@ def test_cli_business_rules_integration():
     # Test 2: Basic Rule Execution
     print("\n2️⃣  Testing Basic Rule Execution...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml"
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET
     ])
     
     if code == 1 and "critical violation(s) found" in stdout:
@@ -59,10 +68,10 @@ def test_cli_business_rules_integration():
     # Test 3: Tag Filtering
     print("\n3️⃣  Testing Tag Filtering...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET,
         "--tags", "completeness"
     ])
     
@@ -76,10 +85,10 @@ def test_cli_business_rules_integration():
     # Test 4: JSON Output Format
     print("\n4️⃣  Testing JSON Output Format...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET,
         "--tags", "completeness",
         "--format", "json"
     ])
@@ -127,10 +136,10 @@ def test_cli_business_rules_integration():
     
     try:
         code, stdout, stderr = run_cli_command([
-            "python", "-m", "sqltest.cli.main", 
-            "--config", "test_config.yaml",
-            "business-rules", 
-            "--rule-set", "sample_business_rules.yaml",
+            PYTHON_BIN, "-m", "sqltest.cli.main",
+            "--config", DEMO_CONFIG,
+            "business-rules",
+            "--rule-set", SAMPLE_RULE_SET,
             "--tags", "data_quality",
             "--output", export_file
         ])
@@ -160,10 +169,10 @@ def test_cli_business_rules_integration():
     # Test 6: Verbose Output
     print("\n6️⃣  Testing Verbose Output...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET,
         "--tags", "data_quality",
         "--verbose"
     ])
@@ -180,20 +189,20 @@ def test_cli_business_rules_integration():
     
     # Test parallel
     code_parallel, stdout_parallel, stderr_parallel = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET,
         "--tags", "data_quality",
         "--parallel"
     ])
     
     # Test sequential  
     code_sequential, stdout_sequential, stderr_sequential = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
-        "business-rules", 
-        "--rule-set", "sample_business_rules.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
+        "business-rules",
+        "--rule-set", SAMPLE_RULE_SET,
         "--tags", "data_quality",
         "--sequential"
     ])
@@ -208,13 +217,13 @@ def test_cli_business_rules_integration():
     # Test 8: Error Handling
     print("\n8️⃣  Testing Error Handling...")
     code, stdout, stderr = run_cli_command([
-        "python", "-m", "sqltest.cli.main", 
-        "--config", "test_config.yaml",
+        PYTHON_BIN, "-m", "sqltest.cli.main",
+        "--config", DEMO_CONFIG,
         "business-rules"
         # No rule set specified - should show error
     ])
     
-    if code == 0 and "Either --rule-set or --directory must be specified" in stdout:
+    if code != 0 and "Either --rule-set or --directory must be specified" in stdout:
         print("   ✅ Error handling working correctly")
         print("   ✅ Shows helpful error message for missing arguments")
     else:
