@@ -150,7 +150,7 @@ class TableAssertionResult:
 class Assertion:
     """Definition of an assertion to be executed."""
     name: str
-    assertion_type: AssertionType
+    assertion_type: AssertionType = AssertionType.CUSTOM
     description: str = ""
     level: AssertionLevel = AssertionLevel.ERROR
     parameters: Dict[str, Any] = field(default_factory=dict)
