@@ -583,16 +583,14 @@ class TestExecutor:
             return {"metrics_enabled": False}
 
         stats = self.metrics.get_summary_stats()
-        stats.update({
-            "metrics_enabled": True,
-            "active_contexts": len(self._active_contexts),
-            "executed_tests": len(self._executed_tests),
-            "max_workers": self.max_workers,
-            "default_isolation_level": self.default_isolation_level.value
-        })
+        stats.update(
+            {
+                "metrics_enabled": True,
+                "active_contexts": len(self._active_contexts),
+                "executed_tests": len(self._executed_tests),
+                "max_workers": self.max_workers,
+                "default_isolation_level": self.default_isolation_level.value,
+            }
+        )
 
         return stats
-
-
-# Maintain backward compatibility
-TestExecutor = EnterpriseTestExecutor
