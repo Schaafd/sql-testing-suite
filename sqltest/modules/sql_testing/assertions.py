@@ -6,11 +6,12 @@ including statistical comparisons, schema validation, and custom assertions.
 import logging
 import math
 import re
-from typing import Any, Dict, List, Optional, Union
-from decimal import Decimal
-import pandas as pd
-import numpy as np
 from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
+import pandas as pd
 
 from .models import AssertionType
 
@@ -76,14 +77,17 @@ class SQLTestAssertionEngine:
             else:
                 result = handler(data, expected, tolerance, ignore_order)
 
+            details = result.get('details')
             return AssertionResult(
                 assertion_type=assertion_type,
-                passed=result['passed'],
-                expected=expected,
-                actual=result.get('actual'),
+                passed=bool(result.get('passed')),
+                expected=self._to_native(expected),
+                actual=self._to_native(result.get('actual')),
                 message=message or result.get('message', f"{assertion_type} assertion"),
                 tolerance=tolerance,
-                details=result.get('details')
+                details=self._to_native(details)
+                if isinstance(details, (dict, list, tuple))
+                else details,
             )
 
         except Exception as e:
@@ -447,6 +451,18 @@ class SQLTestAssertionEngine:
                 'message': f'Custom assertion failed: {str(e)}'
             }
 
+    def _to_native(self, value: Any) -> Any:
+        """Convert numpy scalar/bool types to native Python equivalents."""
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, list):
+            return [self._to_native(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(self._to_native(v) for v in value)
+        if isinstance(value, dict):
+            return {k: self._to_native(v) for k, v in value.items()}
+        return value
+
     def _compare_records(self, expected: Dict, actual: Dict, tolerance: Optional[float] = None) -> bool:
         """Compare two records with optional tolerance for numeric values."""
         if set(expected.keys()) != set(actual.keys()):
@@ -519,15 +535,15 @@ class SQLTestAssertionEngine:
 
             # Compare with tolerance
             if isinstance(expected_value, (int, float)) and isinstance(actual_value, (int, float)):
-                passed = abs(actual_value - expected_value) <= tolerance
+                passed = bool(abs(actual_value - expected_value) <= tolerance)
             else:
-                passed = actual_value == expected_value
+                passed = bool(actual_value == expected_value)
 
             return AssertionResult(
                 assertion_type=AssertionType.CUSTOM,
                 passed=passed,
                 expected=expected_value,
-                actual=actual_value,
+                actual=self._to_native(actual_value),
                 message=f"Statistical {stat_type}: expected {expected_value}, got {actual_value}",
                 tolerance=tolerance,
                 details={

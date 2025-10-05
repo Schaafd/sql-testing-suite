@@ -8,13 +8,21 @@ import os
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 from dataclasses import dataclass
 from pydantic import BaseModel, validator, Field
 import logging
 
 from ...config.models import DatabaseConfig
-from .models import TestCase, TestSuite, TestFixture, AssertionType
+from .models import (
+    TestCase,
+    TestSuite,
+    TestFixture,
+    TestAssertion,
+    AssertionType,
+    TestIsolationLevel,
+    FixtureType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +51,17 @@ class TestAssertionConfig(BaseModel):
             raise ValueError("Tolerance must be non-negative")
         return v
 
+    def to_dataclass(self) -> TestAssertion:
+        """Convert assertion config to dataclass."""
+        return TestAssertion(
+            assertion_type=self.type,
+            expected=self.expected,
+            tolerance=self.tolerance,
+            ignore_order=self.ignore_order,
+            custom_function=self.custom_function,
+            message=self.message,
+        )
+
 
 class TestFixtureConfig(BaseModel):
     """Configuration model for test fixtures."""
@@ -59,6 +78,18 @@ class TestFixtureConfig(BaseModel):
         if v not in valid_types:
             raise ValueError(f"Invalid fixture type. Must be one of: {valid_types}")
         return v
+
+    def to_dataclass(self) -> TestFixture:
+        """Convert fixture config to dataclass."""
+        fixture_type = FixtureType(self.fixture_type)
+        return TestFixture(
+            name=self.name,
+            table_name=self.table_name,
+            fixture_type=fixture_type,
+            data_source=self.data_source,
+            schema=self.schema,
+            cleanup=self.cleanup,
+        )
 
 
 class TestCaseConfig(BaseModel):
@@ -88,6 +119,23 @@ class TestCaseConfig(BaseModel):
             raise ValueError(f"Invalid isolation level. Must be one of: {valid_levels}")
         return v
 
+    def to_dataclass(self) -> TestCase:
+        """Convert case config to dataclass."""
+        isolation_level = TestIsolationLevel(self.isolation_level)
+        return TestCase(
+            name=self.name,
+            description=self.description or "",
+            sql=self.sql,
+            fixtures=[fixture.to_dataclass() for fixture in self.fixtures],
+            assertions=[assertion.to_dataclass() for assertion in self.assertions],
+            setup_sql=self.setup_sql,
+            teardown_sql=self.teardown_sql,
+            timeout=self.timeout,
+            depends_on=self.depends_on,
+            tags=self.tags,
+            isolation_level=isolation_level,
+        )
+
 
 class TestSuiteConfig(BaseModel):
     """Configuration model for test suites."""
@@ -101,6 +149,7 @@ class TestSuiteConfig(BaseModel):
     parallel: bool = False
     max_workers: int = 4
     isolation_level: str = "transaction"
+    fail_fast: bool = False
     tags: List[str] = Field(default_factory=list)
 
     @validator('max_workers')
@@ -108,6 +157,24 @@ class TestSuiteConfig(BaseModel):
         if v <= 0:
             raise ValueError("Max workers must be positive")
         return v
+
+    def to_dataclass(self) -> TestSuite:
+        """Convert suite config to dataclass."""
+        isolation_level = TestIsolationLevel(self.isolation_level)
+        tests = [case.to_dataclass() for case in self.test_cases]
+        return TestSuite(
+            name=self.name,
+            description=self.description or "",
+            tests=tests,
+            setup_sql=self.setup_sql,
+            teardown_sql=self.teardown_sql,
+            tags=self.tags,
+            database=self.database,
+            parallel=self.parallel,
+            max_workers=self.max_workers,
+            isolation_level=isolation_level,
+            fail_fast=self.fail_fast,
+        )
 
 
 class TestConfigSchema(BaseModel):
@@ -133,40 +200,109 @@ class EnvironmentVariableResolver:
 
     @classmethod
     def resolve(cls, value: Any, context: ConfigContext) -> Any:
-        """Resolve environment variables in any value type."""
+        """Resolve environment variables in any value type, including keys."""
+
         if isinstance(value, str):
             return cls._resolve_string(value, context)
-        elif isinstance(value, dict):
-            return {k: cls.resolve(v, context) for k, v in value.items()}
-        elif isinstance(value, list):
+
+        if isinstance(value, dict):
+            resolved_dict: Dict[Any, Any] = {}
+            for key, item in value.items():
+                resolved_key = cls.resolve(key, context) if isinstance(key, str) else key
+                resolved_dict[resolved_key] = cls.resolve(item, context)
+            return resolved_dict
+
+        if isinstance(value, list):
             return [cls.resolve(item, context) for item in value]
-        else:
-            return value
+
+        return value
 
     @classmethod
     def _resolve_string(cls, value: str, context: ConfigContext) -> str:
         """Resolve environment variables in a string value."""
-        def replacer(match):
-            var_expr = match.group(1)
 
-            # Handle default values: ${VAR_NAME:default_value}
-            if ':' in var_expr:
-                var_name, default_value = var_expr.split(':', 1)
-            else:
-                var_name = var_expr
-                default_value = None
+        result: List[str] = []
+        index = 0
+        while index < len(value):
+            start = value.find('${', index)
+            if start == -1:
+                result.append(value[index:])
+                break
 
-            # Look in context variables first, then environment
-            if var_name in context.variables:
-                return str(context.variables[var_name])
-            elif var_name in os.environ:
-                return os.environ[var_name]
-            elif default_value is not None:
-                return default_value
-            else:
-                raise ValueError(f"Environment variable '{var_name}' not found and no default provided")
+            result.append(value[index:start])
+            end = cls._find_expression_end(value, start + 2)
+            if end == -1:
+                raise ValueError(f"Unclosed environment variable expression in '{value}'")
 
-        return cls.ENV_VAR_PATTERN.sub(replacer, value)
+            expression = value[start + 2:end]
+            resolved = cls._resolve_expression(expression, context)
+            result.append(resolved)
+            index = end + 1
+
+        return ''.join(result)
+
+    @classmethod
+    def _resolve_expression(cls, expression: str, context: ConfigContext) -> str:
+        """Resolve a single ${...} expression."""
+
+        var_name, default_value = cls._split_expression(expression)
+
+        if var_name in context.variables:
+            resolved: Any = context.variables[var_name]
+        elif var_name in os.environ:
+            resolved = os.environ[var_name]
+        elif default_value is not None:
+            resolved = cls._resolve_string(default_value, context)
+        else:
+            raise ValueError(
+                f"Environment variable '{var_name}' not found and no default provided"
+            )
+
+        if isinstance(resolved, str) and '${' in resolved:
+            return cls._resolve_string(resolved, context)
+
+        return str(resolved)
+
+    @classmethod
+    def _split_expression(cls, expression: str) -> Tuple[str, Optional[str]]:
+        """Split an expression into variable name and default value."""
+
+        depth = 0
+        for idx, char in enumerate(expression):
+            if expression.startswith('${', idx):
+                depth += 1
+                continue
+            if char == '}':
+                if depth == 0:
+                    raise ValueError(
+                        f"Unexpected closing brace in environment expression: '{expression}'"
+                    )
+                depth -= 1
+                continue
+            if char == ':' and depth == 0:
+                var_name = expression[:idx]
+                default_value = expression[idx + 1:]
+                return var_name, default_value if default_value != '' else ''
+
+        return expression, None
+
+    @staticmethod
+    def _find_expression_end(value: str, start: int) -> int:
+        """Find the closing brace for an expression, accounting for nested placeholders."""
+
+        depth = 0
+        index = start
+        while index < len(value):
+            if value.startswith('${', index):
+                depth += 1
+                index += 2
+                continue
+            if value[index] == '}':
+                if depth == 0:
+                    return index
+                depth -= 1
+            index += 1
+        return -1
 
 
 class ConfigTemplateEngine:
@@ -184,8 +320,9 @@ class ConfigTemplateEngine:
         if str(full_path) in context.include_stack:
             raise ValueError(f"Circular include detected: {' -> '.join(context.include_stack + [str(full_path)])}")
 
-        # Load from cache if available
-        cache_key = f"{full_path}:{context.environment}"
+        # Include environment and variable fingerprint to avoid stale cache entries
+        variables_fingerprint = tuple(sorted((str(k), repr(v)) for k, v in context.variables.items()))
+        cache_key = f"{full_path}:{context.environment}:{hash(variables_fingerprint)}"
         if cache_key in self._template_cache:
             return self._template_cache[cache_key]
 
@@ -203,6 +340,14 @@ class ConfigTemplateEngine:
 
         # Process includes first
         processed_config = self._process_includes(raw_config, template_context)
+
+        # Merge template-defined variables into the resolution context before substitution
+        config_variables = processed_config.get('variables')
+        if isinstance(config_variables, dict):
+            template_context.variables = {
+                **config_variables,
+                **template_context.variables,
+            }
 
         # Resolve environment variables
         processed_config = EnvironmentVariableResolver.resolve(processed_config, template_context)
@@ -405,6 +550,40 @@ class AdvancedConfigLoader:
         """Clear all caches."""
         self._schema_cache.clear()
         self.template_engine._template_cache.clear()
+
+
+class TestConfigLoader(AdvancedConfigLoader):
+    """Compatibility shim preserving legacy loader name."""
+
+    def __init__(self, base_path: Optional[Path] = None):
+        super().__init__(base_path)
+
+
+def create_test_suite_from_yaml(
+    config_path: Union[str, Path],
+    *,
+    suite_name: Optional[str] = None,
+    environment: str = "default",
+    variables: Optional[Dict[str, Any]] = None,
+) -> TestSuite:
+    """Load a test suite definition from YAML and return it as a dataclass."""
+
+    config_path = Path(config_path)
+    loader = TestConfigLoader(base_path=config_path.parent)
+    schema = loader.load_config(config_path, environment=environment, variables=variables)
+
+    if not schema.test_suites:
+        raise ValueError("No test suites defined in configuration")
+
+    if suite_name is None:
+        suite_config = schema.test_suites[0]
+    else:
+        suite_config = next((suite for suite in schema.test_suites if suite.name == suite_name), None)
+        if suite_config is None:
+            available = ", ".join(suite.name for suite in schema.test_suites)
+            raise ValueError(f"Test suite '{suite_name}' not found. Available suites: {available}")
+
+    return suite_config.to_dataclass()
 
 
 # Convenience functions for common operations

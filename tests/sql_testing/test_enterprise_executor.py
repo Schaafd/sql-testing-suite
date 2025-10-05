@@ -27,6 +27,10 @@ from sqltest.modules.sql_testing.models import (
 from sqltest.db.connection import ConnectionManager
 
 
+IsolationManagerClass = TestIsolationManager
+MetricsCollectorClass = TestMetricsCollector
+
+
 class TestIsolationManager:
     """Test the test isolation management functionality."""
 
@@ -43,7 +47,7 @@ class TestIsolationManager:
     @pytest.fixture
     def isolation_manager(self, mock_connection_manager):
         """Create isolation manager with mocked dependencies."""
-        return TestIsolationManager(mock_connection_manager)
+        return IsolationManagerClass(mock_connection_manager)
 
     @pytest.mark.asyncio
     async def test_transaction_isolation_setup(self, isolation_manager, mock_connection_manager):
@@ -117,7 +121,7 @@ class TestMetricsCollector:
     @pytest.fixture
     def metrics_collector(self):
         """Create metrics collector instance."""
-        return TestMetricsCollector()
+        return MetricsCollectorClass()
 
     def test_start_test_metrics(self, metrics_collector):
         """Test starting test metrics collection."""

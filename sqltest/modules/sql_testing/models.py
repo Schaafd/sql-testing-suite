@@ -94,8 +94,8 @@ class TestAssertion:
 class SQLTest:
     """Represents a complete SQL unit test."""
     name: str
-    description: str
     sql: str
+    description: str = ""
     fixtures: List[TestFixture] = field(default_factory=list)
     assertions: List[TestAssertion] = field(default_factory=list)
     setup_sql: Optional[str] = None
@@ -104,13 +104,14 @@ class SQLTest:
     timeout: int = 30  # Seconds
     enabled: bool = True
     depends_on: List[str] = field(default_factory=list)  # Test dependencies
+    isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA
     
     def __post_init__(self):
         """Validate test configuration."""
         if not self.sql.strip():
             raise ValueError("Test SQL cannot be empty")
-        if not self.assertions:
-            raise ValueError("Test must have at least one assertion")
+        if isinstance(self.isolation_level, str):
+            self.isolation_level = TestIsolationLevel(self.isolation_level)
 
 
 @dataclass
@@ -141,17 +142,35 @@ class TestResult:
         """Check if test failed."""
         return self.status in [TestStatus.FAILED, TestStatus.ERROR]
 
+    @property
+    def data(self) -> Optional[pd.DataFrame]:
+        """Compat accessor for result dataset."""
+        return self.query_result
+
+    @data.setter
+    def data(self, value: Optional[pd.DataFrame]) -> None:
+        self.query_result = value
+
+
+# Backward compatibility alias
+TestCase = SQLTest
+
 
 @dataclass
 class TestSuite:
     """Represents a collection of SQL tests."""
     name: str
-    description: str
-    tests: List[SQLTest]
+    description: str = ""
+    tests: List[SQLTest] = field(default_factory=list)
     setup_sql: Optional[str] = None
     teardown_sql: Optional[str] = None
     tags: List[str] = field(default_factory=list)
-    
+    database: Optional[str] = None
+    parallel: bool = False
+    max_workers: int = 4
+    isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA
+    fail_fast: bool = False
+
     def get_tests_by_tag(self, tag: str) -> List[SQLTest]:
         """Get all tests with a specific tag."""
         return [test for test in self.tests if tag in test.tags]
@@ -240,9 +259,13 @@ class SQLTestConfig(BaseModel):
     timeout: int = 30
     enabled: bool = True
     depends_on: List[str] = Field(default_factory=list)
+    isolation_level: Union[TestIsolationLevel, str] = Field(default=TestIsolationLevel.SCHEMA)
     
     def to_dataclass(self) -> SQLTest:
         """Convert to dataclass."""
+        isolation_level = self.isolation_level
+        if isinstance(isolation_level, str):
+            isolation_level = TestIsolationLevel(isolation_level)
         return SQLTest(
             name=self.name,
             description=self.description,
@@ -254,7 +277,8 @@ class SQLTestConfig(BaseModel):
             tags=self.tags,
             timeout=self.timeout,
             enabled=self.enabled,
-            depends_on=self.depends_on
+            depends_on=self.depends_on,
+            isolation_level=isolation_level
         )
 
 
@@ -266,6 +290,7 @@ class TestSuiteConfig(BaseModel):
     setup_sql: Optional[str] = None
     teardown_sql: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    database: Optional[str] = None
     
     def to_dataclass(self) -> TestSuite:
         """Convert to dataclass."""
@@ -275,7 +300,8 @@ class TestSuiteConfig(BaseModel):
             tests=[t.to_dataclass() for t in self.tests],
             setup_sql=self.setup_sql,
             teardown_sql=self.teardown_sql,
-            tags=self.tags
+            tags=self.tags,
+            database=self.database
         )
 
 

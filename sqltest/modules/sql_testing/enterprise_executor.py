@@ -9,16 +9,18 @@ This module provides enterprise-grade SQL test execution with features including
 """
 import asyncio
 import contextlib
+import inspect
 import logging
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set, Union, Callable
-import traceback
-import pandas as pd
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+
+import pandas as pd
 
 from ...db.connection import ConnectionManager
 from ...exceptions import ValidationError, DatabaseError
@@ -32,6 +34,56 @@ from .assertions import SQLTestAssertionEngine
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TestExecutionContext:
+    """Represents an isolated execution context for a SQL test."""
+
+    test_name: str
+    isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA
+    cleanup_resources: List[str] = field(default_factory=list)
+    database_name: Optional[str] = None
+    temporary_schema: Optional[str] = None
+    transaction_savepoint: Optional[str] = None
+    temporary_database: Optional[str] = None
+    created_objects: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TestMetricEntry:
+    """Execution metrics captured for a single test."""
+
+    start_time: datetime = field(default_factory=datetime.now)
+    end_time: Optional[datetime] = None
+    status: Optional[TestStatus] = None
+    error_message: Optional[str] = None
+    assertion_count: int = 0
+    passed_assertions: int = 0
+    failed_assertions: int = 0
+    total_assertion_time: float = 0.0
+
+    @property
+    def duration(self) -> float:
+        if not self.end_time:
+            return 0.0
+        return (self.end_time - self.start_time).total_seconds()
+
+    def finalize(self, status: TestStatus, error_message: Optional[str] = None) -> None:
+        self.end_time = datetime.now()
+        self.status = status
+        self.error_message = error_message
+
+
+@dataclass
+class PerformanceSummary:
+    """Aggregated view of test execution performance."""
+
+    total_tests: int
+    passed_tests: int
+    failed_tests: int
+    total_execution_time: float
+
+
 class TestIsolationManager:
     """Manages test isolation with temporary schemas and transaction control."""
 
@@ -40,99 +92,247 @@ class TestIsolationManager:
         self._isolation_contexts: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.RLock()
 
-    def create_isolation_context(self,
-                               test_name: str,
-                               isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA) -> str:
-        """Create an isolated context for test execution."""
+    def create_isolation_context(
+        self,
+        test_name: str,
+        isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA,
+    ) -> str:
+        """Create an isolated context identifier for legacy workflows."""
         context_id = f"test_{test_name}_{uuid.uuid4().hex[:8]}"
 
         with self._lock:
             self._isolation_contexts[context_id] = {
-                'test_name': test_name,
-                'isolation_level': isolation_level,
-                'created_at': datetime.now(),
-                'temporary_schema': None,
-                'transaction_savepoint': None,
-                'created_objects': [],
-                'cleanup_required': True
+                "test_name": test_name,
+                "isolation_level": isolation_level,
+                "created_at": datetime.now(),
+                "temporary_schema": None,
+                "transaction_savepoint": None,
+                "created_objects": [],
+                "cleanup_required": True,
             }
 
         return context_id
 
-    async def setup_isolation(self, context_id: str, database_name: str) -> Dict[str, Any]:
+    async def setup_isolation(
+        self,
+        context: Union[TestExecutionContext, str],
+        database_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Set up test isolation based on the configured level."""
-        context = self._isolation_contexts.get(context_id)
-        if not context:
+
+        if isinstance(context, TestExecutionContext):
+            return await self._setup_context_object(context, database_name)
+
+        context_id = context
+        if database_name is None:
+            raise ValueError(
+                "database_name must be provided when using legacy isolation context identifiers"
+            )
+
+        context_data = self._isolation_contexts.get(context_id)
+        if not context_data:
             raise ValueError(f"Invalid isolation context: {context_id}")
 
         adapter = self.connection_manager.get_adapter(database_name)
-        isolation_level = context['isolation_level']
+        isolation_level = context_data["isolation_level"]
 
         try:
             if isolation_level == TestIsolationLevel.SCHEMA:
-                # Create temporary schema
                 schema_name = f"test_schema_{uuid.uuid4().hex[:8]}"
-                await adapter.execute_query(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
-                context['temporary_schema'] = schema_name
-
-                # Set search path to use temporary schema
-                await adapter.execute_query(f"SET search_path TO {schema_name}, public")
+                await self._call_method(adapter, "execute_query", f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+                context_data["temporary_schema"] = schema_name
+                await self._call_method(adapter, "execute_query", f"SET search_path TO {schema_name}, public")
 
             elif isolation_level == TestIsolationLevel.TRANSACTION:
-                # Start transaction and create savepoint
-                await adapter.execute_query("BEGIN")
+                await self._call_method(adapter, "execute_query", "BEGIN")
                 savepoint_name = f"test_savepoint_{uuid.uuid4().hex[:8]}"
-                await adapter.execute_query(f"SAVEPOINT {savepoint_name}")
-                context['transaction_savepoint'] = savepoint_name
+                await self._call_method(adapter, "execute_query", f"SAVEPOINT {savepoint_name}")
+                context_data["transaction_savepoint"] = savepoint_name
 
             elif isolation_level == TestIsolationLevel.DATABASE:
-                # Create temporary database (more complex, database-specific)
                 db_name = f"test_db_{uuid.uuid4().hex[:8]}"
-                await adapter.execute_query(f"CREATE DATABASE {db_name}")
-                context['temporary_database'] = db_name
+                await self._call_method(adapter, "execute_query", f"CREATE DATABASE {db_name}")
+                context_data["temporary_database"] = db_name
 
             return {
-                'schema': context.get('temporary_schema'),
-                'savepoint': context.get('transaction_savepoint'),
-                'database': context.get('temporary_database')
+                "schema": context_data.get("temporary_schema"),
+                "savepoint": context_data.get("transaction_savepoint"),
+                "database": context_data.get("temporary_database"),
             }
 
-        except Exception as e:
-            logger.error(f"Failed to setup test isolation: {e}")
+        except Exception as exc:
+            logger.error(f"Failed to setup test isolation: {exc}")
             await self.cleanup_isolation(context_id, database_name)
             raise
 
-    async def cleanup_isolation(self, context_id: str, database_name: str):
+    async def cleanup_isolation(
+        self,
+        context: Union[TestExecutionContext, str],
+        database_name: Optional[str] = None,
+    ) -> None:
         """Clean up test isolation resources."""
-        context = self._isolation_contexts.get(context_id)
-        if not context:
+
+        if isinstance(context, TestExecutionContext):
+            await self._cleanup_context_object(context, database_name)
+            return
+
+        context_id = context
+        if database_name is None:
+            raise ValueError(
+                "database_name must be provided when using legacy isolation context identifiers"
+            )
+
+        context_data = self._isolation_contexts.get(context_id)
+        if not context_data:
             return
 
         adapter = self.connection_manager.get_adapter(database_name)
-        isolation_level = context['isolation_level']
+        isolation_level = context_data["isolation_level"]
 
         try:
             if isolation_level == TestIsolationLevel.SCHEMA:
-                schema_name = context.get('temporary_schema')
+                schema_name = context_data.get("temporary_schema")
                 if schema_name:
-                    await adapter.execute_query(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+                    await self._call_method(
+                        adapter,
+                        "execute_query",
+                        f"DROP SCHEMA IF EXISTS {schema_name} CASCADE",
+                    )
 
             elif isolation_level == TestIsolationLevel.TRANSACTION:
-                savepoint_name = context.get('transaction_savepoint')
+                savepoint_name = context_data.get("transaction_savepoint")
                 if savepoint_name:
-                    await adapter.execute_query(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                await adapter.execute_query("ROLLBACK")
+                    await self._call_method(
+                        adapter,
+                        "execute_query",
+                        f"ROLLBACK TO SAVEPOINT {savepoint_name}",
+                    )
+                await self._call_method(adapter, "execute_query", "ROLLBACK")
 
             elif isolation_level == TestIsolationLevel.DATABASE:
-                db_name = context.get('temporary_database')
+                db_name = context_data.get("temporary_database")
                 if db_name:
-                    await adapter.execute_query(f"DROP DATABASE IF EXISTS {db_name}")
+                    await self._call_method(
+                        adapter,
+                        "execute_query",
+                        f"DROP DATABASE IF EXISTS {db_name}",
+                    )
 
-        except Exception as e:
-            logger.warning(f"Failed to cleanup test isolation: {e}")
+        except Exception as exc:
+            logger.warning(f"Failed to cleanup test isolation: {exc}")
         finally:
             with self._lock:
                 self._isolation_contexts.pop(context_id, None)
+
+    async def _setup_context_object(
+        self,
+        context: TestExecutionContext,
+        database_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        adapter = self._resolve_adapter(database_name or context.database_name)
+        level = context.isolation_level
+
+        if level == TestIsolationLevel.SCHEMA:
+            schema_name = f"test_schema_{uuid.uuid4().hex[:8]}"
+            try:
+                await self._call_method(
+                    adapter,
+                    "execute_query",
+                    f"CREATE SCHEMA IF NOT EXISTS {schema_name}",
+                )
+                await self._call_method(
+                    adapter,
+                    "execute_query",
+                    f"SET search_path TO {schema_name}, public",
+                )
+                context.temporary_schema = schema_name
+                return {"schema": schema_name}
+            except Exception as exc:
+                logger.debug("Schema isolation not supported: %s", exc)
+                return {}
+
+        if level == TestIsolationLevel.TRANSACTION:
+            if hasattr(adapter, "begin_transaction"):
+                await self._call_method(adapter, "begin_transaction")
+            else:
+                await self._call_method(adapter, "execute_query", "BEGIN")
+
+            savepoint_name = f"test_savepoint_{uuid.uuid4().hex[:8]}"
+            try:
+                await self._call_method(
+                    adapter,
+                    "execute_query",
+                    f"SAVEPOINT {savepoint_name}",
+                )
+                context.transaction_savepoint = savepoint_name
+                return {"savepoint": savepoint_name}
+            except Exception as exc:
+                logger.debug("Savepoint creation skipped: %s", exc)
+                return {}
+
+        if level == TestIsolationLevel.DATABASE:
+            db_name = f"test_db_{uuid.uuid4().hex[:8]}"
+            await self._call_method(adapter, "execute_query", f"CREATE DATABASE {db_name}")
+            context.temporary_database = db_name
+            return {"database": db_name}
+
+        return {}
+
+    async def _cleanup_context_object(
+        self,
+        context: TestExecutionContext,
+        database_name: Optional[str] = None,
+    ) -> None:
+        adapter = self._resolve_adapter(database_name or context.database_name)
+        level = context.isolation_level
+
+        if level == TestIsolationLevel.SCHEMA and context.temporary_schema:
+            await self._call_method(
+                adapter,
+                "execute_query",
+                f"DROP SCHEMA IF EXISTS {context.temporary_schema} CASCADE",
+            )
+            context.temporary_schema = None
+
+        elif level == TestIsolationLevel.TRANSACTION:
+            if context.transaction_savepoint:
+                try:
+                    await self._call_method(
+                        adapter,
+                        "execute_query",
+                        f"ROLLBACK TO SAVEPOINT {context.transaction_savepoint}",
+                    )
+                except Exception as exc:
+                    logger.debug("Rollback to savepoint failed: %s", exc)
+            if hasattr(adapter, "rollback_transaction"):
+                await self._call_method(adapter, "rollback_transaction")
+            else:
+                await self._call_method(adapter, "execute_query", "ROLLBACK")
+            context.transaction_savepoint = None
+
+        elif level == TestIsolationLevel.DATABASE and context.temporary_database:
+            await self._call_method(
+                adapter,
+                "execute_query",
+                f"DROP DATABASE IF EXISTS {context.temporary_database}",
+            )
+            context.temporary_database = None
+
+    def _resolve_adapter(self, database_name: Optional[str]):
+        if hasattr(self.connection_manager, "begin_transaction"):
+            return self.connection_manager
+        if hasattr(self.connection_manager, "get_adapter"):
+            return self.connection_manager.get_adapter(database_name)
+        return self.connection_manager
+
+    async def _call_method(self, target: Any, method_name: str, *args, **kwargs):
+        method = getattr(target, method_name, None)
+        if method is None:
+            return None
+        result = method(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
 
 class TestMetricsCollector:
@@ -141,7 +341,39 @@ class TestMetricsCollector:
     def __init__(self):
         self.metrics: Dict[str, List[float]] = defaultdict(list)
         self.counters: Dict[str, int] = defaultdict(int)
+        self.test_metrics: Dict[str, TestMetricEntry] = {}
         self._lock = threading.Lock()
+
+    def start_test(self, test_name: str) -> None:
+        with self._lock:
+            self.test_metrics[test_name] = TestMetricEntry()
+            self.counters["tests_started"] += 1
+
+    def end_test(self, test_name: str, status: TestStatus, error_message: Optional[str] = None) -> None:
+        with self._lock:
+            entry = self.test_metrics.setdefault(test_name, TestMetricEntry())
+            entry.finalize(status, error_message)
+
+            duration_ms = entry.duration * 1000
+            self.metrics[f"{test_name}_execution_time"].append(duration_ms)
+            self.metrics["all_execution_times"].append(duration_ms)
+
+            if status == TestStatus.PASSED:
+                self.counters["tests_passed"] += 1
+            elif status == TestStatus.FAILED:
+                self.counters["tests_failed"] += 1
+            elif status == TestStatus.ERROR:
+                self.counters["tests_error"] += 1
+
+    def record_assertion(self, test_name: str, passed: bool, duration: float = 0.0) -> None:
+        with self._lock:
+            entry = self.test_metrics.setdefault(test_name, TestMetricEntry())
+            entry.assertion_count += 1
+            if passed:
+                entry.passed_assertions += 1
+            else:
+                entry.failed_assertions += 1
+            entry.total_assertion_time += duration
 
     def record_execution_time(self, test_name: str, duration_ms: float):
         """Record test execution time."""
@@ -159,7 +391,6 @@ class TestMetricsCollector:
         with self._lock:
             stats = {}
 
-            # Execution time statistics
             if "all_execution_times" in self.metrics:
                 times = self.metrics["all_execution_times"]
                 stats['execution_times'] = {
@@ -170,10 +401,33 @@ class TestMetricsCollector:
                     'total_ms': sum(times)
                 }
 
-            # Counter statistics
             stats['counters'] = dict(self.counters)
+            stats['tests'] = {
+                name: {
+                    'status': entry.status.name if entry.status else None,
+                    'duration': entry.duration,
+                    'assertions': entry.assertion_count,
+                    'passed_assertions': entry.passed_assertions,
+                    'failed_assertions': entry.failed_assertions,
+                }
+                for name, entry in self.test_metrics.items()
+            }
 
             return stats
+
+    def get_performance_summary(self) -> PerformanceSummary:
+        with self._lock:
+            total_tests = len(self.test_metrics)
+            passed_tests = sum(1 for entry in self.test_metrics.values() if entry.status == TestStatus.PASSED)
+            failed_tests = sum(1 for entry in self.test_metrics.values() if entry.status == TestStatus.FAILED)
+            total_execution_time = sum(entry.duration for entry in self.test_metrics.values())
+
+        return PerformanceSummary(
+            total_tests=total_tests,
+            passed_tests=passed_tests,
+            failed_tests=failed_tests,
+            total_execution_time=total_execution_time,
+        )
 
 
 class EnterpriseTestExecutor:
@@ -235,16 +489,23 @@ class EnterpriseTestExecutor:
             start_time=start_time
         )
 
+        if self.metrics:
+            self.metrics.start_test(test.name)
+
         # Determine database and isolation level
         db_name = database_name or getattr(test, 'database_name', 'default')
         iso_level = isolation_level or getattr(test, 'isolation_level', self.default_isolation_level)
 
         # Create isolation context
-        context_id = self.isolation_manager.create_isolation_context(test.name, iso_level)
+        context = TestExecutionContext(
+            test_name=test.name,
+            isolation_level=iso_level,
+            database_name=db_name,
+        )
 
         try:
             with self._test_execution_lock:
-                self._active_contexts[test.name] = context_id
+                self._active_contexts[test.name] = context
 
             # Check if test should be skipped
             if not test.enabled:
@@ -260,7 +521,7 @@ class EnterpriseTestExecutor:
                 return result
 
             # Set up test isolation
-            isolation_info = await self.isolation_manager.setup_isolation(context_id, db_name)
+            isolation_info = await self.isolation_manager.setup_isolation(context, db_name)
 
             # Set up fixtures within isolated context
             if test.fixtures:
@@ -268,17 +529,29 @@ class EnterpriseTestExecutor:
 
             # Run setup SQL if provided
             if test.setup_sql:
-                setup_result = await self.connection_manager.get_adapter(db_name).execute_query(test.setup_sql)
-                if not setup_result.success:
-                    raise Exception(f"Setup SQL failed: {setup_result.error}")
+                success, error = await self._execute_sql_block(
+                    test.setup_sql,
+                    db_name,
+                    fetch_results=False,
+                )
+                if not success:
+                    raise Exception(error or "Setup SQL failed")
 
             # Execute main test SQL
-            query_result = await self.connection_manager.get_adapter(db_name).execute_query(test.sql)
-            if not query_result.success:
-                raise Exception(f"Test SQL failed: {query_result.error}")
+            query_result = await self._call_adapter(
+                self.connection_manager,
+                "execute_query",
+                test.sql,
+                db_name=db_name,
+            )
+            if not self._is_successful_result(query_result):
+                result.status = TestStatus.FAILED
+                result.error_message = getattr(query_result, "error", "Test SQL execution failed")
+                result.end_time = datetime.now()
+                return result
 
-            result.query_result = query_result.data
-            result.row_count = len(query_result.data) if query_result.data is not None else 0
+            result.data = getattr(query_result, "data", None)
+            result.row_count = len(result.data) if result.data is not None else 0
 
             # Run assertions
             assertion_results = []
@@ -305,6 +578,9 @@ class EnterpriseTestExecutor:
                     'details': assertion_result.details
                 })
 
+                if self.metrics:
+                    self.metrics.record_assertion(test.name, assertion_result.passed)
+
                 if not assertion_result.passed:
                     all_passed = False
 
@@ -313,28 +589,20 @@ class EnterpriseTestExecutor:
 
             # Run teardown SQL if provided
             if test.teardown_sql:
-                teardown_result = await self.connection_manager.get_adapter(db_name).execute_query(test.teardown_sql)
-                if not teardown_result.success:
-                    logger.warning(f"Teardown SQL failed for test {test.name}: {teardown_result.error}")
+                success, error = await self._execute_sql_block(
+                    test.teardown_sql,
+                    db_name,
+                    fetch_results=False,
+                )
+                if not success:
+                    logger.warning(f"Teardown SQL failed for test {test.name}: {error}")
 
             # Clean up fixtures
             if test.fixtures:
                 await self.fixture_manager.cleanup_fixtures(test.fixtures)
 
-            # Record metrics
-            if self.metrics:
-                duration_ms = (datetime.now() - start_time).total_seconds() * 1000
-                self.metrics.record_execution_time(test.name, duration_ms)
-                self.metrics.increment_counter("tests_executed")
-                if result.status == TestStatus.PASSED:
-                    self.metrics.increment_counter("tests_passed")
-                elif result.status == TestStatus.FAILED:
-                    self.metrics.increment_counter("tests_failed")
-                elif result.status == TestStatus.ERROR:
-                    self.metrics.increment_counter("tests_error")
-
         except Exception as e:
-            result.status = TestStatus.ERROR
+            result.status = TestStatus.FAILED
             result.error_message = str(e)
 
             # Try to clean up on error
@@ -346,17 +614,29 @@ class EnterpriseTestExecutor:
 
         finally:
             result.end_time = datetime.now()
+            if result.end_time and result.start_time:
+                result.execution_time = (result.end_time - result.start_time).total_seconds()
             self._executed_tests.add(test.name)
+
+            if self.metrics:
+                self.metrics.end_test(test.name, result.status, result.error_message)
 
             # Clean up isolation context
             try:
-                await self.isolation_manager.cleanup_isolation(context_id, db_name)
+                await self.isolation_manager.cleanup_isolation(context, db_name)
             except Exception as cleanup_error:
                 logger.warning(f"Isolation cleanup failed for test {test.name}: {cleanup_error}")
 
             # Remove from active contexts
             with self._test_execution_lock:
                 self._active_contexts.pop(test.name, None)
+
+            close_connections = getattr(self.connection_manager, "close_all_connections", None)
+            if callable(close_connections):
+                try:
+                    close_connections()
+                except Exception:
+                    logger.debug("Failed to close database connections for %s", test.name, exc_info=True)
 
         return result
 
@@ -366,6 +646,104 @@ class EnterpriseTestExecutor:
             return True
 
         return all(dep in self._executed_tests for dep in test.depends_on)
+
+    async def _call_adapter(self, target: Any, method_name: str, *args, **kwargs):
+        """Invoke adapter methods that may be synchronous or asynchronous."""
+
+        method = getattr(target, method_name, None)
+        if method is None:
+            return None
+
+        result = method(*args, **kwargs)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    @staticmethod
+    def _is_successful_result(result: Any) -> bool:
+        """Determine whether an adapter call succeeded."""
+        if result is None:
+            return True
+        success = getattr(result, "success", None)
+        if success is None:
+            return True
+        return bool(success)
+
+    async def _execute_sql_block(
+        self,
+        sql: str,
+        db_name: str,
+        *,
+        fetch_results: bool = False,
+    ) -> Tuple[bool, Optional[str]]:
+        """Execute one or more SQL statements sequentially."""
+
+        if not sql:
+            return True, None
+
+        statements = [statement.strip() for statement in sql.split(';') if statement.strip()]
+        if not statements:
+            return True, None
+
+        for statement in statements:
+            result = await self._call_adapter(
+                self.connection_manager,
+                "execute_query",
+                statement,
+                db_name=db_name,
+                fetch_results=fetch_results,
+            )
+
+            if not self._is_successful_result(result):
+                return False, getattr(result, "error", "SQL execution failed")
+
+        return True, None
+
+    async def execute_test_suite(
+        self,
+        test_suite: TestSuite,
+        *,
+        parallel: Optional[bool] = None,
+        fail_fast: Optional[bool] = None,
+        max_workers: Optional[int] = None,
+        database_name: Optional[str] = None,
+    ) -> List[TestResult]:
+        """Execute a test suite and return individual test results."""
+
+        effective_parallel = parallel if parallel is not None else getattr(test_suite, "parallel", False)
+        effective_fail_fast = fail_fast if fail_fast is not None else getattr(test_suite, "fail_fast", False)
+        target_database = database_name or getattr(test_suite, "database", None) or "default"
+
+        previous_workers = self.max_workers
+        requested_workers = max_workers if max_workers is not None else getattr(test_suite, "max_workers", previous_workers)
+        suite_result: Optional[TestSuiteResult] = None
+
+        previous_executed = self._executed_tests.copy()
+        self._executed_tests = set()
+
+        try:
+            self.max_workers = requested_workers
+            suite_result = await self.execute_test_suite_with_isolation(
+                test_suite,
+                database_name=target_database,
+                parallel=effective_parallel,
+                fail_fast=effective_fail_fast,
+            )
+
+            suite_result.total_tests = len(suite_result.test_results)
+            suite_result.passed_tests = sum(1 for r in suite_result.test_results if r.status == TestStatus.PASSED)
+            suite_result.failed_tests = sum(1 for r in suite_result.test_results if r.status == TestStatus.FAILED)
+            suite_result.skipped_tests = sum(1 for r in suite_result.test_results if r.status == TestStatus.SKIPPED)
+            suite_result.error_tests = sum(1 for r in suite_result.test_results if r.status == TestStatus.ERROR)
+
+            return suite_result.test_results
+        finally:
+            self.max_workers = previous_workers
+            if suite_result is None:
+                suite_executed = self._executed_tests
+            else:
+                suite_executed = {result.test_name for result in suite_result.test_results}
+            self._executed_tests = previous_executed.union(suite_executed)
 
     async def execute_test_suite_with_isolation(self,
                                               test_suite: TestSuite,
@@ -383,11 +761,13 @@ class EnterpriseTestExecutor:
         try:
             # Run suite setup
             if test_suite.setup_sql:
-                setup_result = await self.connection_manager.get_adapter(db_name).execute_query(
-                    test_suite.setup_sql
+                success, error_msg = await self._execute_sql_block(
+                    test_suite.setup_sql,
+                    db_name,
+                    fetch_results=False,
                 )
-                if not setup_result.success:
-                    raise Exception(f"Suite setup failed: {setup_result.error}")
+                if not success:
+                    raise Exception(error_msg or "Suite setup failed")
 
             # Get enabled tests
             tests_to_run = test_suite.get_enabled_tests()
@@ -407,11 +787,13 @@ class EnterpriseTestExecutor:
 
             # Run suite teardown
             if test_suite.teardown_sql:
-                teardown_result = await self.connection_manager.get_adapter(db_name).execute_query(
-                    test_suite.teardown_sql
+                success, error_msg = await self._execute_sql_block(
+                    test_suite.teardown_sql,
+                    db_name,
+                    fetch_results=False,
                 )
-                if not teardown_result.success:
-                    logger.warning(f"Suite teardown failed: {teardown_result.error}")
+                if not success:
+                    logger.warning(f"Suite teardown failed: {error_msg}")
 
         except Exception as e:
             logger.error(f"Test suite execution failed: {e}")
@@ -533,18 +915,9 @@ class EnterpriseTestExecutor:
         if self.metrics:
             self.metrics = TestMetricsCollector()
 
-    def get_execution_metrics(self) -> Dict[str, Any]:
-        """Get comprehensive execution metrics."""
+    def get_execution_metrics(self) -> PerformanceSummary:
+        """Return aggregate performance summary for executed tests."""
         if not self.metrics:
-            return {"metrics_enabled": False}
+            return PerformanceSummary(0, 0, 0, 0.0)
 
-        stats = self.metrics.get_summary_stats()
-        stats.update({
-            "metrics_enabled": True,
-            "active_contexts": len(self._active_contexts),
-            "executed_tests": len(self._executed_tests),
-            "max_workers": self.max_workers,
-            "default_isolation_level": self.default_isolation_level.value
-        })
-
-        return stats
+        return self.metrics.get_performance_summary()

@@ -5,7 +5,14 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+    AliasChoices,
+    ConfigDict,
+)
 from pydantic_settings import BaseSettings
 
 
@@ -68,7 +75,10 @@ class ConnectionPoolConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     """Database connection configuration."""
-    type: DatabaseType
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: DatabaseType = Field(validation_alias=AliasChoices("type", "driver"))
     host: Optional[str] = None
     port: Optional[int] = None
     database: Optional[str] = None
@@ -94,8 +104,12 @@ class DatabaseConfig(BaseModel):
     def validate_database_config(self):
         """Validate database-specific required fields."""
         if self.type == DatabaseType.SQLITE:
+            if not (self.path or self.database):
+                raise ValueError("SQLite databases require a 'path' or 'database' field")
             if not self.path:
-                raise ValueError("SQLite databases require a 'path' field")
+                # Allow configs that specify `database` instead of `path`
+                object.__setattr__(self, "path", self.database)
+            return self
         elif self.type == DatabaseType.SNOWFLAKE:
             required_fields = ['account', 'warehouse', 'database', 'username', 'password']
             for field in required_fields:

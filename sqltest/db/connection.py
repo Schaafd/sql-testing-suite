@@ -67,13 +67,19 @@ class AdapterFactory:
 class ConnectionManager:
     """Manages database connections and adapters."""
     
-    def __init__(self, config: SQLTestConfig) -> None:
+    def __init__(self, config: Union[SQLTestConfig, DatabaseConfig]) -> None:
         """Initialize connection manager.
-        
+
         Args:
             config: SQLTest configuration.
         """
-        self.config = config
+        if isinstance(config, DatabaseConfig):
+            self.config = SQLTestConfig(
+                databases={"default": config},
+                default_database="default",
+            )
+        else:
+            self.config = config
         self._adapters: Dict[str, BaseAdapter] = {}
         self._factory = AdapterFactory()
     
