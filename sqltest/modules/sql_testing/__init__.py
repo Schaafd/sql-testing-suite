@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
 import asyncio
 
-from sqltest.core.connection_manager import ConnectionManager
+from sqltest.db.connection import ConnectionManager
 from .models import (
     SQLTest, TestSuite, TestResult, TestSuiteResult, TestStatus,
     TestFixture, TestAssertion, FixtureType, AssertionType,

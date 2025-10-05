@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any, Set
 import traceback
 import pandas as pd
 
-from sqltest.core.connection_manager import ConnectionManager
+from sqltest.db.connection import ConnectionManager
 from sqltest.modules.assertions.engine import AssertionEngine
 from .models import (
     SQLTest, TestSuite, TestResult, TestSuiteResult, 

@@ -14,7 +14,7 @@ import pandas as pd
 from faker import Faker
 import random
 
-from sqltest.core.connection_manager import ConnectionManager
+from sqltest.db.connection import ConnectionManager
 from .models import TestFixture, FixtureType, MockDataConfig
 
 
