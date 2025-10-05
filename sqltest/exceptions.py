@@ -34,7 +34,7 @@ class DatabaseError(SQLTestError):
 
 class ValidationError(SQLTestError):
     """Raised when data validation fails."""
-    
+
     def __init__(
         self,
         message: str,
@@ -51,9 +51,22 @@ class ValidationError(SQLTestError):
         self.failed_count = failed_count
 
 
+class AssertionError(SQLTestError):
+    """Raised when assertion evaluation fails."""
+
+    def __init__(
+        self,
+        message: str,
+        assertion_name: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message, details)
+        self.assertion_name = assertion_name
+
+
 class TestExecutionError(SQLTestError):
     """Raised when unit test execution fails."""
-    
+
     def __init__(
         self,
         message: str,
