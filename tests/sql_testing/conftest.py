@@ -83,9 +83,6 @@ def sample_test_data():
     ]
 
 
-# Pytest markers for test categorization
-pytest_plugins = []
-
 def pytest_configure(config):
     """Configure pytest markers."""
     config.addinivalue_line("markers", "unit: Unit tests")
