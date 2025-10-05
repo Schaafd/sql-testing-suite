@@ -10,7 +10,7 @@ from rich.table import Table
 from sqltest.cli.utils import console
 from sqltest.config import get_config
 from sqltest.db import get_connection_manager
-from sqltest.exceptions import ConfigurationError
+from sqltest.exceptions import ConfigurationError, DatabaseError
 
 
 @click.group(name="db")
@@ -177,6 +177,63 @@ def views_command(ctx: click.Context, database: Optional[str], schema: Optional[
             console.print(f"[yellow]View listing not supported for {adapter.get_driver_name()}[/yellow]")
     except ConfigurationError as exc:
         console.print(f"[red]Configuration Error: {exc}[/red]")
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise SystemExit(1) from exc
+
+
+@db_group.command(name="describe")
+@click.argument('table_name')
+@click.option("--database", "-d", help="Database to use (default: default database)")
+@click.option("--schema", "-s", help="Schema name (database-specific)")
+@click.pass_context
+def describe_command(
+    ctx: click.Context,
+    table_name: str,
+    database: Optional[str],
+    schema: Optional[str],
+) -> None:
+    """Describe table structure and column metadata."""
+    try:
+        config = get_config(ctx.obj.get('config'))
+        manager = get_connection_manager(config)
+
+        db_name = database or config.default_database
+        adapter = manager.get_adapter(db_name)
+        table_info = adapter.get_table_info(table_name, schema)
+
+        console.print(f"[bold blue]Table Structure: {table_info['table_name']}[/bold blue]")
+        summary_parts = [f"Database: [cyan]{db_name}[/cyan]"]
+        if table_info.get('schema'):
+            summary_parts.append(f"Schema: [cyan]{table_info['schema']}[/cyan]")
+        summary_parts.append(f"Rows: [green]{table_info.get('row_count', 0)}[/green]")
+        console.print(" ".join(summary_parts) + "\n")
+
+        console.print("[bold cyan]Column Details[/bold cyan]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type", style="green")
+        table.add_column("Nullable", style="yellow")
+        table.add_column("Default", style="white")
+        table.add_column("Primary Key", style="blue")
+
+        for column in table_info.get('columns', []):
+            table.add_row(
+                str(column.get('column_name', '')),
+                str(column.get('data_type', '')),
+                "Yes" if str(column.get('is_nullable', '')).upper() in {'YES', 'TRUE', '1'} else "No",
+                str(column.get('column_default', '') or ""),
+                "✓" if column.get('primary_key') else "",
+            )
+
+        console.print(table)
+
+    except ConfigurationError as exc:
+        console.print(f"[red]Configuration Error: {exc}[/red]")
+        raise SystemExit(1) from exc
+    except DatabaseError as exc:
+        console.print(f"[red]Database Error: {exc}[/red]")
         raise SystemExit(1) from exc
     except Exception as exc:
         console.print(f"[red]Error: {exc}[/red]")

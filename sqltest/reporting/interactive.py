@@ -1,7 +1,7 @@
 """Interactive report features and dashboard components."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +24,39 @@ class InteractiveWidget:
     options: Dict[str, Any] = field(default_factory=dict)
     position: Dict[str, int] = field(default_factory=dict)  # x, y, width, height
 
+    def __getitem__(self, key: str) -> Any:
+        """Allow dictionary-style access for compatibility with legacy tests."""
+        if key == "id":
+            return self.widget_id
+        if key == "title":
+            return self.title
+        if key == "type":
+            return self.widget_type
+        if key == "data":
+            return self.data.get("data", self.data)
+        if key == "options":
+            return self.options
+        if key in self.data:
+            return self.data[key]
+        if key in self.options:
+            return self.options[key]
+        if key == "position":
+            return self.position
+        raise KeyError(key)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = {
+            "id": self.widget_id,
+            "title": self.title,
+            "type": self.widget_type,
+            "position": self.position,
+        }
+        payload["options"] = self.options
+        payload["data"] = self.data
+        payload.update(self.options)
+        payload.update(self.data)
+        return payload
+
 
 @dataclass
 class FilterConfig:
@@ -31,9 +64,35 @@ class FilterConfig:
     filter_id: str
     label: str
     filter_type: str  # select, range, date, text
-    column: str
+    column: Optional[str] = None
     options: List[Any] = field(default_factory=list)
     default_value: Any = None
+    extras: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        return self.filter_id
+
+    @property
+    def type(self) -> str:
+        return self.filter_type
+
+    def __getitem__(self, key: str) -> Any:
+        mapping = {
+            "id": self.filter_id,
+            "filter_id": self.filter_id,
+            "label": self.label,
+            "type": self.filter_type,
+            "filter_type": self.filter_type,
+            "column": self.column,
+            "options": self.options,
+            "default_value": self.default_value,
+        }
+        if key in mapping:
+            return mapping[key]
+        if key in self.extras:
+            return self.extras[key]
+        raise KeyError(key)
 
 
 class InteractiveReportBuilder:
@@ -45,9 +104,15 @@ class InteractiveReportBuilder:
         self.filters: List[FilterConfig] = []
         self.layout_config: Dict[str, Any] = {}
 
-    def add_metric_card(self, widget_id: str, title: str, value: Union[int, float, str],
-                       subtitle: Optional[str] = None, trend: Optional[float] = None,
-                       color: str = "primary") -> 'InteractiveReportBuilder':
+    def add_metric_card(
+        self,
+        widget_id: str,
+        title: str,
+        value: Union[int, float, str],
+        subtitle: Optional[str] = None,
+        trend: Optional[float] = None,
+        color: str = "primary",
+    ) -> 'InteractiveReportBuilder':
         """Add a metric card widget.
 
         Args:
@@ -61,21 +126,32 @@ class InteractiveReportBuilder:
         Returns:
             Self for method chaining
         """
-        # Convert to expected format for tests
-        widget_data = {
-            "id": widget_id,
-            "title": title,
-            "value": value,
-            "subtitle": subtitle,
-            "trend": trend,
-            "color": color,
-            "type": "metric"
-        }
-        self.widgets.append(widget_data)
+        widget = InteractiveWidget(
+            widget_id=widget_id,
+            title=title,
+            widget_type="metric",
+            data={
+                "value": value,
+                "subtitle": subtitle,
+                "trend": trend,
+                "color": color,
+            },
+            options={
+                "display": "metric",
+                "trend_direction": "positive" if (trend or 0) >= 0 else "negative",
+            },
+        )
+        self.widgets.append(widget)
         return self
 
-    def add_chart_widget(self, widget_id: str, title: str, chart_type: str,
-                        data: Dict[str, Any], options: Optional[Dict[str, Any]] = None) -> 'InteractiveReportBuilder':
+    def add_chart_widget(
+        self,
+        widget_id: str,
+        title: str,
+        chart_type: str,
+        data: Dict[str, Any],
+        options: Optional[Dict[str, Any]] = None,
+    ) -> 'InteractiveReportBuilder':
         """Add a chart widget.
 
         Args:
@@ -88,16 +164,14 @@ class InteractiveReportBuilder:
         Returns:
             Self for method chaining
         """
-        # Convert to expected format for tests
-        widget_data = {
-            "id": widget_id,
-            "title": title,
-            "chart_type": chart_type,
-            "data": data,
-            "options": options or {},
-            "type": "chart"
-        }
-        self.widgets.append(widget_data)
+        widget = InteractiveWidget(
+            widget_id=widget_id,
+            title=title,
+            widget_type="chart",
+            data=data,
+            options={"chart_type": chart_type, **(options or {})},
+        )
+        self.widgets.append(widget)
         return self
 
     def add_table_widget(self, widget_id: str, title: str, dataframe: pd.DataFrame,
@@ -123,14 +197,14 @@ class InteractiveReportBuilder:
             data={
                 "columns": dataframe.columns.tolist(),
                 "data": dataframe.to_dict('records'),
-                "total_rows": len(dataframe)
+                "total_rows": len(dataframe),
             },
             options={
                 "paginate": paginate,
                 "searchable": searchable,
                 "sortable": sortable,
-                "page_size": 25
-            }
+                "page_size": 25,
+            },
         )
         self.widgets.append(widget)
         return self
@@ -151,14 +225,28 @@ class InteractiveReportBuilder:
         Returns:
             Self for method chaining
         """
-        # Convert to expected format
-        widget_data = {
-            "id": widget_id,
-            "title": title,
-            "data": data,
-            "type": "table"
-        }
-        self.widgets.append(widget_data)
+        if not data:
+            columns: List[str] = []
+        else:
+            columns = list(data[0].keys())
+
+        widget = InteractiveWidget(
+            widget_id=widget_id,
+            title=title,
+            widget_type="table",
+            data={
+                "columns": columns,
+                "data": data,
+                "total_rows": len(data),
+            },
+            options={
+                "paginate": paginate,
+                "searchable": searchable,
+                "sortable": sortable,
+                "page_size": 25,
+            },
+        )
+        self.widgets.append(widget)
         return self
 
     def add_progress_widget(self, widget_id: str, title: str, value: Union[int, float],
@@ -175,16 +263,17 @@ class InteractiveReportBuilder:
         Returns:
             Self for method chaining
         """
-        # Convert to expected format
-        widget_data = {
-            "id": widget_id,
-            "title": title,
-            "value": value,
-            "max_value": max_value,
-            "color": color,
-            "type": "progress"
-        }
-        self.widgets.append(widget_data)
+        widget = InteractiveWidget(
+            widget_id=widget_id,
+            title=title,
+            widget_type="progress",
+            data={
+                "value": value,
+                "max_value": max_value,
+            },
+            options={"color": color},
+        )
+        self.widgets.append(widget)
         return self
 
     def add_kpi_grid(self, widget_id: str, title: str, kpis: List[Dict[str, Any]]) -> 'InteractiveReportBuilder':
@@ -223,21 +312,30 @@ class InteractiveReportBuilder:
             Self for method chaining
         """
         # Convert to expected format for tests
-        filter_data = {
-            "id": filter_id,
-            "label": label,
-            "type": filter_type,
-            "options": options_or_column if isinstance(options_or_column, list) else [],
-            "default_value": default_value
-        }
+        column: Optional[str] = None
+        options: List[Any] = []
+        extras: Dict[str, Any] = {}
 
-        # Handle different parameter formats
-        if isinstance(options_or_column, str):
-            filter_data["column"] = options_or_column
+        if isinstance(options_or_column, list):
+            options = options_or_column
+        elif isinstance(options_or_column, str):
+            column = options_or_column
         elif isinstance(options_or_column, dict):
-            filter_data.update(options_or_column)
+            extras = dict(options_or_column)
+            options = extras.pop('options', extras.get('values', []))
+            column = extras.get('column', extras.get('field'))
 
-        self.filters.append(filter_data)
+        filter_obj = FilterConfig(
+            filter_id=filter_id,
+            label=label,
+            filter_type=filter_type,
+            column=column,
+            options=options,
+            default_value=default_value,
+            extras=extras,
+        )
+
+        self.filters.append(filter_obj)
         return self
 
     def set_layout(self, layout_type: str = "grid", columns: int = 12,
@@ -265,8 +363,27 @@ class InteractiveReportBuilder:
         Returns:
             JavaScript code string
         """
-        js_code = """
-// Interactive Report JavaScript
+        widgets_payload = self._serialize_for_js([widget.to_dict() for widget in self.widgets])
+        filters_payload = self._serialize_for_js([
+            {
+                "id": filter_obj.filter_id,
+                "label": filter_obj.label,
+                "type": filter_obj.filter_type,
+                "column": filter_obj.column,
+                "options": filter_obj.options,
+                "default_value": filter_obj.default_value,
+                **filter_obj.extras,
+            }
+            for filter_obj in self.filters
+        ])
+
+        prefix = (
+            "// Interactive Report JavaScript\n"
+            f"const INTERACTIVE_WIDGETS = {widgets_payload};\n"
+            f"const INTERACTIVE_FILTERS = {filters_payload};\n"
+        )
+
+        js_body = """
 class InteractiveReport {
     constructor() {
         this.charts = {};
@@ -297,6 +414,7 @@ class InteractiveReport {
 
             // Add event listeners
             filter.addEventListener('change', (e) => {
+                saveFilterPreferences();
                 this.applyFilters();
             });
         });
@@ -550,9 +668,12 @@ class InteractiveReport {
 }
 
 // Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
+function initializeDashboard() {
     window.interactiveReport = new InteractiveReport();
-});
+    restoreFilterPreferences();
+}
+
+document.addEventListener('DOMContentLoaded', initializeDashboard);
 
 // Utility functions
 function formatNumber(value, decimals = 0) {
@@ -572,9 +693,72 @@ function formatCurrency(value, currency = 'USD') {
         currency: currency
     }).format(value);
 }
+
+function clearAllFilters() {
+    document.querySelectorAll('.report-filter').forEach(filter => {
+        if (filter.tagName === 'SELECT') {
+            filter.selectedIndex = 0;
+        } else {
+            filter.value = '';
+        }
+    });
+
+    document.querySelectorAll('.range-min').forEach(input => input.value = '');
+    document.querySelectorAll('.range-max').forEach(input => input.value = '');
+
+    saveFilterPreferences();
+    if (window.interactiveReport) {
+        window.interactiveReport.applyFilters();
+    }
+}
+
+function saveFilterPreferences() {
+    if (!window.localStorage) return;
+
+    const preferences = {};
+    document.querySelectorAll('.report-filter').forEach(filter => {
+        preferences[filter.dataset.filterId] = filter.value;
+    });
+
+    try {
+        localStorage.setItem('interactiveDashboardFilters', JSON.stringify(preferences));
+    } catch (err) {
+        console.warn('Unable to save filter preferences', err);
+    }
+}
+
+function restoreFilterPreferences() {
+    if (!window.localStorage) return;
+
+    try {
+        const preferences = JSON.parse(localStorage.getItem('interactiveDashboardFilters') || '{}');
+        Object.keys(preferences).forEach(filterId => {
+            const element = document.querySelector(`[data-filter-id="${filterId}"]`);
+            if (element) {
+                element.value = preferences[filterId];
+            }
+        });
+    } catch (err) {
+        console.warn('Unable to restore filter preferences', err);
+    }
+}
+
+function exportDashboard() {
+    if (window.interactiveReport) {
+        window.interactiveReport.updateAllWidgets();
+    }
+    window.print();
+}
+
+function toggleFullscreenDashboard() {
+    const container = document.querySelector('.interactive-dashboard');
+    if (container) {
+        container.classList.toggle('dashboard-fullscreen');
+    }
+}
         """
 
-        return js_code
+        return prefix + js_body
 
     def generate_css(self) -> str:
         """Generate CSS styles for interactive features.
@@ -588,6 +772,19 @@ function formatCurrency(value, currency = 'USD') {
     padding: 20px;
     background: #f8f9fa;
     min-height: 100vh;
+}
+
+.dashboard-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    background: #f8f9fa;
+    overflow: auto;
+    padding: 30px;
+}
+
+.dashboard-nav {
+    border-radius: 8px;
 }
 
 .dashboard-header {
@@ -738,6 +935,12 @@ function formatCurrency(value, currency = 'USD') {
 .chart-widget .widget-content {
     position: relative;
     height: 300px;
+}
+
+.chart-container {
+    position: relative;
+    width: 100%;
+    min-height: 260px;
 }
 
 .chart-widget canvas {
@@ -926,6 +1129,20 @@ function formatCurrency(value, currency = 'USD') {
 
         return css_code
 
+    def _serialize_for_js(self, payload: Any) -> str:
+        """Serialize Python objects for embedding into JavaScript."""
+        return json.dumps(payload, default=self._json_default)
+
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, (set, tuple)):
+            return list(value)
+        if isinstance(value, np.generic):
+            return value.item()
+        return value
+
 
 class TrendAnalyzer:
     """Advanced trend analysis and forecasting for reports."""
@@ -1038,14 +1255,37 @@ class TrendAnalyzer:
         Returns:
             Dictionary containing executive summary
         """
+        total_rows = sum(len(df) for df in report_data.raw_data.values())
+        total_datasets = len(report_data.raw_data)
+        execution_time = report_data.execution_metrics.execution_time if report_data.execution_metrics else 0.0
+        memory_usage = report_data.execution_metrics.memory_usage if report_data.execution_metrics else 0.0
+
+        missing_values = 0
+        numeric_columns = 0
+        for df in report_data.raw_data.values():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                missing_values += int(df.isnull().sum().sum())
+                numeric_columns += len(df.select_dtypes(include=['number']).columns)
+
+        data_quality_score = 100.0
+        if total_rows > 0:
+            data_quality_score = max(0.0, 100.0 - (missing_values / total_rows) * 100.0)
+
+        performance_score = max(10.0, 100.0 - execution_time * 10.0)
+        completeness_penalty = (missing_values / max(1, numeric_columns * (total_rows or 1))) * 100.0
+        completeness_score = max(20.0, 100.0 - completeness_penalty)
+
+        critical_findings = [f for f in report_data.findings if f.severity == SeverityLevel.CRITICAL]
+        high_findings = [f for f in report_data.findings if f.severity == SeverityLevel.HIGH]
+
         summary = {
             "overview": {
-                "total_records": sum(len(df) for df in report_data.raw_data.values()),
-                "data_sources": len(report_data.raw_data),
+                "total_records": total_rows,
+                "data_sources": total_datasets,
                 "time_period": "Generated analysis period",
-                "total_datasets": len(report_data.raw_data),
-                "total_rows": sum(len(df) for df in report_data.raw_data.values()),
-                "generation_time": report_data.execution_metrics.execution_time,
+                "total_datasets": total_datasets,
+                "total_rows": total_rows,
+                "generation_time": execution_time,
                 "timestamp": datetime.now().isoformat()
             },
             "key_metrics": [],
@@ -1062,17 +1302,13 @@ class TrendAnalyzer:
                 "issues": []
             },
             "performance_metrics": {
-                "data_quality_score": 0,
-                "performance_score": 0,
-                "completeness_score": 0
+                "data_quality_score": round(data_quality_score, 1),
+                "performance_score": round(performance_score, 1),
+                "completeness_score": round(completeness_score, 1)
             }
         }
 
-        # Analyze findings by severity
-        critical_findings = [f for f in report_data.findings if f.severity == SeverityLevel.CRITICAL]
-        high_findings = [f for f in report_data.findings if f.severity == SeverityLevel.HIGH]
-
-        # Add critical issues
+        # Critical issues and findings
         summary["critical_issues"] = [
             {
                 "title": f.title,
@@ -1080,67 +1316,84 @@ class TrendAnalyzer:
                 "category": f.category,
                 "affected_objects": f.affected_objects
             }
-            for f in critical_findings[:5]  # Top 5 critical issues
+            for f in critical_findings[:5]
         ]
 
-        # Add key findings
         summary["key_findings"] = [
             {
                 "title": f.title,
                 "description": f.description,
                 "category": f.category
             }
-            for f in (critical_findings + high_findings)[:10]  # Top 10 findings
+            for f in (critical_findings + high_findings)[:10]
         ]
 
-        # Generate recommendations
+        severity_counts: Dict[str, int] = {}
+        category_counts: Dict[str, int] = {}
+        for finding in report_data.findings:
+            severity = finding.severity.value
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            if finding.category:
+                category_counts[finding.category] = category_counts.get(finding.category, 0) + 1
+
+        summary["findings_summary"]["by_severity"] = severity_counts
+        summary["findings_summary"]["by_category"] = category_counts
+
+        # Recommendations
         recommendations = []
         if critical_findings:
             recommendations.append("Address critical data quality issues immediately")
         if high_findings:
-            recommendations.append("Review and resolve high-priority findings")
-
-        # Performance-based recommendations
-        if report_data.execution_metrics.execution_time > 30:
-            recommendations.append("Optimize report generation performance")
-
-        if report_data.execution_metrics.cache_hit_rate < 0.5:
-            recommendations.append("Improve caching strategy for better performance")
-
+            recommendations.append("Prioritize remediation for high severity findings")
+        if not recommendations and summary["findings_summary"]["total_findings"] > 0:
+            recommendations.append("Review medium severity findings for improvement opportunities")
+        if execution_time > 10:
+            recommendations.append("Investigate report performance bottlenecks")
+        if not recommendations:
+            recommendations.append("Maintain ongoing monitoring of key metrics")
         summary["recommendations"] = recommendations
 
-        # Calculate scores
-        total_findings = len(report_data.findings)
-        critical_weight = len(critical_findings) * 3
-        high_weight = len(high_findings) * 2
+        # Data quality score adjustments
+        severity_penalty = len(critical_findings) * 20 + len(high_findings) * 10
+        adjusted_quality = max(0.0, data_quality_score - severity_penalty)
+        summary["data_quality"]["score"] = round(adjusted_quality, 1)
+        summary["data_quality"]["issues"] = [finding.title for finding in critical_findings[:5]]
+        summary["performance_metrics"]["data_quality_score"] = summary["data_quality"]["score"]
 
-        if total_findings > 0:
-            summary["performance_metrics"]["data_quality_score"] = max(0, 100 - (critical_weight + high_weight) * 10)
-        else:
-            summary["performance_metrics"]["data_quality_score"] = 100
+        # Key metrics for metric cards
+        summary["key_metrics"] = [
+            {
+                "name": "Total Records",
+                "value": f"{total_rows:,}",
+                "subtitle": "Across all datasets",
+                "trend": summary["performance_metrics"]["data_quality_score"] - 50,
+                "color": "info"
+            },
+            {
+                "name": "Findings Logged",
+                "value": summary["findings_summary"]["total_findings"],
+                "subtitle": "Issues identified",
+                "trend": -(len(critical_findings) * 15 + len(high_findings) * 5),
+                "color": "warning"
+            },
+            {
+                "name": "Execution Time",
+                "value": f"{execution_time:.2f}s",
+                "subtitle": "Processing duration",
+                "trend": -execution_time,
+                "color": "primary"
+            },
+            {
+                "name": "Memory Usage",
+                "value": f"{memory_usage:.1f} MB",
+                "subtitle": "Peak consumption",
+                "trend": -(memory_usage * 0.05),
+                "color": "secondary"
+            }
+        ]
 
-        # Performance score based on execution metrics
-        perf_score = 100
-        if report_data.execution_metrics.execution_time > 10:
-            perf_score -= 20
-        if report_data.execution_metrics.memory_usage > 1000:
-            perf_score -= 15
-        if report_data.execution_metrics.cache_hit_rate < 0.8:
-            perf_score -= 10
-
-        summary["performance_metrics"]["performance_score"] = max(0, perf_score)
-
-        # Completeness score based on data coverage
-        null_percentage = 0
-        for df in report_data.raw_data.values():
-            if not df.empty:
-                null_percentage += df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
-
-        if report_data.raw_data:
-            avg_null_percentage = null_percentage / len(report_data.raw_data)
-            summary["performance_metrics"]["completeness_score"] = max(0, 100 - (avg_null_percentage * 100))
-        else:
-            summary["performance_metrics"]["completeness_score"] = 100
+        # Insights
+        summary["key_insights"] = TrendAnalyzer.identify_key_insights(report_data.raw_data)
 
         return summary
 
@@ -1156,8 +1409,103 @@ class TrendAnalyzer:
         """
         widgets = []
 
+        def _slugify(value: str) -> str:
+            safe = ''.join(ch.lower() if ch.isalnum() else '_' for ch in value)
+            return safe.strip('_') or 'metric'
+
+        def _normalize_trend(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                lowered = value.lower()
+                if lowered in {'up', 'increase', 'positive', 'growth'}:
+                    return 5.0
+                if lowered in {'down', 'decrease', 'negative', 'decline'}:
+                    return -5.0
+                if lowered in {'stable', 'flat', 'steady', 'neutral'}:
+                    return 0.0
+            return None
+
         # Executive summary metrics
         exec_summary = TrendAnalyzer.generate_executive_summary(report_data)
+        overview = exec_summary.get("overview") or {}
+        performance_metrics = (
+            exec_summary.get("performance_metrics")
+            or exec_summary.get("performance")
+            or {}
+        )
+
+        total_datasets = overview.get("total_datasets")
+        if total_datasets is None:
+            total_datasets = overview.get("data_sources")
+        if total_datasets is None:
+            total_datasets = len(report_data.raw_data)
+        else:
+            try:
+                total_datasets = int(total_datasets)
+            except (TypeError, ValueError):
+                total_datasets = len(report_data.raw_data)
+
+        total_rows = overview.get("total_rows")
+        if total_rows is None:
+            total_rows = overview.get("total_records")
+        if total_rows is None:
+            total_rows = sum(
+                len(df) for df in report_data.raw_data.values()
+                if isinstance(df, pd.DataFrame)
+            )
+        else:
+            try:
+                total_rows = int(total_rows)
+            except (TypeError, ValueError):
+                total_rows = sum(
+                    len(df) for df in report_data.raw_data.values()
+                    if isinstance(df, pd.DataFrame)
+                )
+
+        generation_time = overview.get("generation_time")
+        if generation_time is None and report_data.execution_metrics:
+            generation_time = report_data.execution_metrics.execution_time or 0.0
+        if generation_time is None:
+            generation_time = 0.0
+        else:
+            try:
+                generation_time = float(generation_time)
+            except (TypeError, ValueError):
+                generation_time = 0.0
+
+        data_quality_score = performance_metrics.get("data_quality_score")
+        if data_quality_score is None:
+            data_quality_score = (
+                exec_summary.get("data_quality", {}).get("score")
+            )
+        if data_quality_score is None:
+            data_quality_score = 0.0
+        else:
+            try:
+                data_quality_score = float(data_quality_score)
+            except (TypeError, ValueError):
+                data_quality_score = 0.0
+
+        # Metric card widgets from key metrics
+        for idx, metric in enumerate(exec_summary.get("key_metrics", [])[:4]):
+            metric_name = metric.get("name") or f"Metric {idx + 1}"
+            raw_value = metric.get("value", "")
+            widget_id = f"metric_{_slugify(metric_name)}"
+            widgets.append(InteractiveWidget(
+                widget_id=widget_id,
+                title=metric_name,
+                widget_type="metric_card",
+                data={
+                    "value": raw_value,
+                    "subtitle": metric.get("subtitle"),
+                    "trend": _normalize_trend(metric.get("trend")),
+                    "color": metric.get("color", "primary"),
+                },
+                options={"display": "metric"},
+            ))
 
         # Data overview widget
         widgets.append(InteractiveWidget(
@@ -1168,22 +1516,22 @@ class TrendAnalyzer:
                 "kpis": [
                     {
                         "name": "Total Datasets",
-                        "value": exec_summary["overview"]["total_datasets"],
+                        "value": total_datasets,
                         "unit": "datasets"
                     },
                     {
                         "name": "Total Rows",
-                        "value": f"{exec_summary['overview']['total_rows']:,}",
+                        "value": f"{int(total_rows):,}" if total_rows is not None else "0",
                         "unit": "rows"
                     },
                     {
                         "name": "Generation Time",
-                        "value": f"{exec_summary['overview']['generation_time']:.2f}",
+                        "value": f"{float(generation_time):.2f}",
                         "unit": "seconds"
                     },
                     {
                         "name": "Data Quality Score",
-                        "value": f"{exec_summary['performance_metrics']['data_quality_score']:.0f}",
+                        "value": f"{float(data_quality_score):.0f}",
                         "unit": "%"
                     }
                 ]
@@ -1213,6 +1561,40 @@ class TrendAnalyzer:
                 },
                 options={"chart_type": "doughnut"}
             ))
+
+        # Time series chart if available
+        for dataset_name, df in report_data.raw_data.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                datetime_cols = df.select_dtypes(include=['datetime64[ns]', 'datetime64[ns, UTC]']).columns
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if datetime_cols.any() and numeric_cols.any():
+                    date_col = datetime_cols[0]
+                    value_col = numeric_cols[0]
+                    trend = TrendAnalyzer.analyze_time_series(df, date_col, value_col)
+                    chart_data = {
+                        "labels": df[date_col].dt.strftime('%Y-%m-%d').tolist(),
+                        "datasets": [
+                            {
+                                "label": value_col.replace('_', ' ').title(),
+                                "data": df[value_col].tolist(),
+                                "borderColor": "#0d6efd",
+                                "backgroundColor": "rgba(13, 110, 253, 0.1)",
+                                "fill": True,
+                            }
+                        ],
+                    }
+                    widgets.append(InteractiveWidget(
+                        widget_id=f"trend_{dataset_name}",
+                        title=f"{dataset_name.replace('_', ' ').title()} Trend",
+                        widget_type="chart",
+                        data=chart_data,
+                        options={
+                            "chart_type": "line",
+                            "tension": 0.3,
+                            "trend": trend,
+                        },
+                    ))
+                    break
 
         # Recent findings table
         recent_findings = sorted(report_data.findings,
@@ -1324,6 +1706,12 @@ class TrendAnalyzer:
             if df.empty:
                 continue
 
+            insights.append({
+                "type": "dataset_overview",
+                "description": f"Dataset '{name}' contains {len(df):,} rows and {len(df.columns)} columns",
+                "confidence": 0.5
+            })
+
             # High cardinality columns
             for col in df.select_dtypes(include=['object']).columns:
                 cardinality = df[col].nunique()
@@ -1333,6 +1721,16 @@ class TrendAnalyzer:
                         "description": f"Column '{col}' in {name} has very high cardinality ({cardinality} unique values)",
                         "confidence": 0.9
                     })
+                else:
+                    value_counts = df[col].value_counts(normalize=True)
+                    if not value_counts.empty:
+                        top_category, top_share = value_counts.index[0], value_counts.iloc[0]
+                        if top_share > 0.4:
+                            insights.append({
+                                "type": "category_dominance",
+                                "description": f"Column '{col}' in {name} is dominated by '{top_category}' ({top_share:.0%})",
+                                "confidence": 0.7
+                            })
 
             # Missing data patterns
             null_percentages = df.isnull().mean()
@@ -1357,6 +1755,21 @@ class TrendAnalyzer:
                         "type": "correlation",
                         "description": f"Dataset '{name}' shows strong correlations between numeric columns",
                         "confidence": 0.8
+                    })
+
+            # Time trend detection for datetime + numeric
+            datetime_cols = df.select_dtypes(include=['datetime64[ns]', 'datetime64[ns, UTC]']).columns
+            if len(datetime_cols) > 0 and len(numeric_cols) > 0:
+                date_col = datetime_cols[0]
+                value_col = numeric_cols[0]
+                ordered = df.sort_values(date_col)
+                if len(ordered) >= 2:
+                    slope = ordered[value_col].iloc[-1] - ordered[value_col].iloc[0]
+                    direction = "increasing" if slope > 0 else "decreasing" if slope < 0 else "stable"
+                    insights.append({
+                        "type": "trend",
+                        "description": f"Metric '{value_col}' in {name} appears to be {direction}",
+                        "confidence": 0.6
                     })
 
         return insights
@@ -1437,6 +1850,13 @@ class TrendAnalyzer:
             total_cells += dataset_cells
             missing_cells += dataset_missing
 
+            if dataset_missing > 0:
+                missing_percentage = (dataset_missing / dataset_cells) * 100 if dataset_cells else 0
+                quality_report["issues"].append(
+                    f"Dataset '{name}' has {missing_percentage:.1f}% missing values"
+                )
+                quality_report["completeness"] -= min(15, missing_percentage)
+
             # Check for duplicate rows
             duplicates = df.duplicated().sum()
             if duplicates > 0:
@@ -1446,8 +1866,8 @@ class TrendAnalyzer:
             # Check for all-null columns
             null_cols = df.columns[df.isnull().all()].tolist()
             if null_cols:
-                quality_report["issues"].append(f"Dataset '{name}' has completely empty columns: {', '.join(null_cols)}")
-                quality_report["validity"] -= 15
+                    quality_report["issues"].append(f"Dataset '{name}' has completely empty columns: {', '.join(null_cols)}")
+                    quality_report["validity"] -= 15
 
         # Calculate overall completeness
         if total_cells > 0:
@@ -1455,6 +1875,10 @@ class TrendAnalyzer:
             quality_report["completeness"] = completeness_percentage
         else:
             quality_report["completeness"] = 0
+
+        quality_report["completeness"] = max(0, min(100, quality_report["completeness"]))
+        quality_report["consistency"] = max(0, min(100, quality_report["consistency"]))
+        quality_report["validity"] = max(0, min(100, quality_report["validity"]))
 
         # Calculate overall score
         quality_report["overall_score"] = min(100, max(0, (

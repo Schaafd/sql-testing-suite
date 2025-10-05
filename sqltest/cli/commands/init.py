@@ -200,7 +200,9 @@ def init_command(
             raise SystemExit(1)
         if not force:
             console.print(
-                f"[red]Error: Directory '{project_name}' already exists. Use --force to update it.[/red]"
+                "[red]Error: Directory already exists.[/red] "
+                f"[red]Path:[/red] [cyan]{project_path}[/cyan] "
+                "[red]Use --force to update it.[/red]"
             )
             raise SystemExit(1)
         console.print(f"[yellow]⚠️  Reusing existing project directory: {project_path}[/yellow]")

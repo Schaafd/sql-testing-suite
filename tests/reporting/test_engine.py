@@ -370,10 +370,11 @@ class TestReportingEngine:
         engine = ReportingEngine()
 
         # Create a larger dataset
+        categories = (['A', 'B', 'C'] * (10000 // 3 + 1))[:10000]
         large_df = pd.DataFrame({
             'id': range(10000),
             'value': range(10000),
-            'category': ['A', 'B', 'C'] * 3334
+            'category': categories
         })
 
         config = ReportConfiguration(

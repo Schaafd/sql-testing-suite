@@ -44,7 +44,7 @@ def profile_command(
     schema: Optional[str],
     output_format: str,
 ) -> None:
-    """Run profiling for a table or adhoc query."""
+    """Profile data for a table or adhoc query to capture quality metrics."""
     if not table and not query:
         console.print("[red]Error: Either --table or --query must be specified[/red]")
         return
@@ -200,7 +200,7 @@ def _render_profile(profile, output_format: str) -> None:
     console.print(score_table)
 
     if profile.columns:
-        console.print("\n[bold cyan]🧭 COLUMN ANALYSIS[/bold cyan]")
+        console.print("\n[bold cyan]📊 COLUMN ANALYSIS SUMMARY[/bold cyan]")
         column_table = Table(show_header=True, header_style="bold magenta")
         column_table.add_column("Column", style="cyan")
         column_table.add_column("Type", style="green")

@@ -9,6 +9,7 @@ import csv
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Union
+import inspect
 from pathlib import Path
 import pandas as pd
 from faker import Faker
@@ -190,7 +191,7 @@ class FixtureManager:
         else:
             return self.base_path / path_obj
     
-    async def setup_fixtures(self, fixtures: List[TestFixture]) -> None:
+    async def setup_fixtures(self, fixtures: List[TestFixture], isolation_info: Optional[Any] = None) -> None:
         """
         Set up test fixtures by creating tables and loading data.
         
@@ -226,7 +227,7 @@ class FixtureManager:
         create_sql = self._generate_create_table_sql(table_name, df, schema)
         
         # Execute CREATE TABLE
-        result = self.connection_manager.execute_query(create_sql)
+        result = await self._execute_query(create_sql)
         if not result.success:
             raise ValueError(f"Failed to create table {table_name}: {result.error}")
         
@@ -296,7 +297,7 @@ class FixtureManager:
         # Execute batch insert
         # Note: This would need to be adapted based on the connection manager's batch insert capabilities
         for value_tuple in values:
-            result = self.connection_manager.execute_query(insert_sql, value_tuple)
+            result = await self._execute_query(insert_sql, value_tuple)
             if not result.success:
                 raise ValueError(f"Failed to insert data into {table_name}: {result.error}")
     
@@ -310,7 +311,7 @@ class FixtureManager:
         for fixture in fixtures:
             if fixture.cleanup and fixture.table_name in self._created_tables:
                 drop_sql = f"DROP TABLE IF EXISTS {fixture.table_name}"
-                result = self.connection_manager.execute_query(drop_sql)
+                result = await self._execute_query(drop_sql)
                 if not result.success:
                     # Log warning but don't fail test
                     print(f"Warning: Failed to drop table {fixture.table_name}: {result.error}")
@@ -320,6 +321,13 @@ class FixtureManager:
     def clear_cache(self) -> None:
         """Clear fixture data cache."""
         self._loaded_fixtures.clear()
+
+    async def _execute_query(self, sql: str, params: Optional[Any] = None):
+        """Execute a query on the connection manager and await if required."""
+        result = self.connection_manager.execute_query(sql, params)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
 
 class MockDataGenerator:

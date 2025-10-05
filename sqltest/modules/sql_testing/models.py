@@ -104,7 +104,7 @@ class SQLTest:
     timeout: int = 30  # Seconds
     enabled: bool = True
     depends_on: List[str] = field(default_factory=list)  # Test dependencies
-    isolation_level: TestIsolationLevel = TestIsolationLevel.SCHEMA
+    isolation_level: TestIsolationLevel = TestIsolationLevel.TRANSACTION
     
     def __post_init__(self):
         """Validate test configuration."""

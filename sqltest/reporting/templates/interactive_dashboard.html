@@ -12,34 +12,83 @@
     <link href="https://cdn.datatables.net/responsive/2.4.0/css/responsive.bootstrap5.min.css" rel="stylesheet">
 
     <!-- JavaScript Dependencies -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.datatables.net/1.13.1/js/jquery.dataTables.min.js"></script>
-    <script src="https://cdn.datatables.net/1.13.1/js/dataTables.bootstrap5.min.js"></script>
-    <script src="https://cdn.datatables.net/responsive/2.4.0/js/dataTables.responsive.min.js"></script>
-    <script src="https://cdn.datatables.net/responsive/2.4.0/js/responsive.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js" defer></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/jquery.dataTables.min.js" defer></script>
+    <script src="https://cdn.datatables.net/1.13.1/js/dataTables.bootstrap5.min.js" defer></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/dataTables.responsive.min.js" defer></script>
+    <script src="https://cdn.datatables.net/responsive/2.4.0/js/responsive.bootstrap5.min.js" defer></script>
 
     <style>
+        {% if config and config.styling %}
+        :root {
+            --primary-color: {{ config.styling.primary_color if config.styling.primary_color else '#0d6efd' }};
+            --secondary-color: {{ config.styling.secondary_color if config.styling.secondary_color else '#6c757d' }};
+        }
+
+        body {
+            font-family: {{ config.styling.font_family if config.styling.font_family else '"Inter", sans-serif' }};
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        .btn-secondary {
+            background-color: var(--secondary-color);
+            border-color: var(--secondary-color);
+        }
+
+        .metric-value {
+            color: var(--primary-color);
+        }
+        {% endif %}
         {{ interactive_css|safe }}
     </style>
 </head>
 <body>
     <div class="interactive-dashboard">
+        <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4 dashboard-nav" role="navigation" aria-label="Dashboard navigation">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#overview">Dashboard</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#dashboardNav"
+                        aria-controls="dashboardNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="dashboardNav">
+                    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                        <li class="nav-item"><a class="nav-link" href="#overview">Overview</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#widgets">Widgets</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#findings">Findings</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#recommendations">Recommendations</a></li>
+                    </ul>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-outline-primary" onclick="exportDashboard()" aria-label="Export dashboard">
+                            <i class="fas fa-download"></i> Export
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="toggleFullscreenDashboard()" aria-label="Toggle fullscreen">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
         <!-- Dashboard Header -->
-        <div class="dashboard-header">
+        <section id="overview" class="dashboard-header" role="region" aria-label="Dashboard overview">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
                     <h1 class="h3 mb-1">{{ metadata.title }}</h1>
                     <p class="text-muted mb-0">{{ metadata.description or "Interactive Dashboard" }}</p>
                 </div>
                 <div class="d-flex gap-2">
-                    <button class="btn btn-outline-primary btn-sm" onclick="window.interactiveReport.startRealTimeUpdates()">
+                    <button class="btn btn-outline-primary btn-sm" onclick="window.interactiveReport.startRealTimeUpdates()" aria-label="Enable auto refresh">
                         <i class="fas fa-sync-alt"></i> Auto-Refresh
                     </button>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="exportDashboard()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="exportDashboard()" aria-label="Export dashboard">
                         <i class="fas fa-download"></i> Export
                     </button>
-                    <button class="btn btn-outline-info btn-sm" onclick="toggleFullscreen()">
+                    <button class="btn btn-outline-info btn-sm" onclick="toggleFullscreenDashboard()" aria-label="Toggle fullscreen">
                         <i class="fas fa-expand"></i> Full Screen
                     </button>
                 </div>
@@ -100,57 +149,85 @@
                     </div>
                 </div>
             </div>
+            {% if executive_summary.key_metrics %}
+            <div class="row mt-4 g-3" role="list" aria-label="Key metrics">
+                {% for metric in executive_summary.key_metrics %}
+                <div class="col-sm-6 col-lg-3" role="listitem">
+                    <div class="widget-card metric-card" aria-label="{{ metric.name }} metric">
+                        <div class="widget-header">
+                            <h6 class="widget-title">{{ metric.name }}</h6>
+                        </div>
+                        <div class="widget-content text-center">
+                            <div class="metric-value {{ metric.color if metric.color else '' }}">{{ metric.value }}</div>
+                            {% if metric.subtitle %}<div class="metric-subtitle">{{ metric.subtitle }}</div>{% endif %}
+                            {% if metric.trend is not none %}
+                            <div class="metric-trend {{ 'positive' if metric.trend >= 0 else 'negative' }}">
+                                <i class="fas fa-arrow-{{ 'up' if metric.trend >= 0 else 'down' }}"></i>
+                                {{ metric.trend|round(1) }}%
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
             {% endif %}
-        </div>
+            {% endif %}
+        </section>
 
         <!-- Dashboard Filters -->
         {% if filters %}
-        <div class="dashboard-filters">
-            <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filters</h5>
+        <div class="dashboard-filters" role="region" aria-label="Dashboard filters">
+            <h5 class="mb-3"><i class="fas fa-filter me-2" aria-hidden="true"></i>Filters</h5>
             <div class="filter-group">
                 {% for filter in filters %}
                 <div class="filter-control">
-                    <label for="filter_{{ filter.filter_id }}">{{ filter.label }}</label>
-                    {% if filter.filter_type == 'select' %}
-                        <select id="filter_{{ filter.filter_id }}"
+                    <label for="filter_{{ filter.id }}">{{ filter.label }}</label>
+                    {% set filter_type = filter.type or filter.filter_type %}
+                    {% if filter_type == 'select' %}
+                        <select id="filter_{{ filter.id }}"
                                 class="form-select report-filter"
-                                data-filter-id="{{ filter.filter_id }}"
-                                data-filter-type="{{ filter.filter_type }}"
-                                data-column="{{ filter.column }}">
+                                data-filter-id="{{ filter.id }}"
+                                data-filter-type="{{ filter_type }}"
+                                data-column="{{ filter.column }}"
+                                aria-label="Filter {{ filter.label }}">
                             <option value="">All</option>
                             {% for option in filter.options %}
                             <option value="{{ option }}" {% if option == filter.default_value %}selected{% endif %}>{{ option }}</option>
                             {% endfor %}
                         </select>
-                    {% elif filter.filter_type == 'range' %}
-                        <div class="d-flex gap-2">
-                            <input type="number" class="form-control range-min" placeholder="Min" data-filter-id="{{ filter.filter_id }}">
-                            <input type="number" class="form-control range-max" placeholder="Max" data-filter-id="{{ filter.filter_id }}">
+                    {% elif filter_type == 'range' %}
+                        <div class="input-group" data-filter-id="{{ filter.id }}" data-filter-type="range" data-column="{{ filter.column }}">
+                            <input type="number" class="form-control range-min" placeholder="Min" value="{{ filter.options[0] if filter.options else '' }}" aria-label="Minimum {{ filter.label }}">
+                            <span class="input-group-text" aria-hidden="true">to</span>
+                            <input type="number" class="form-control range-max" placeholder="Max" value="{{ filter.options[1] if filter.options else '' }}" aria-label="Maximum {{ filter.label }}">
                         </div>
-                    {% elif filter.filter_type == 'date' %}
+                    {% elif filter_type == 'date' %}
                         <input type="date"
-                               id="filter_{{ filter.filter_id }}"
+                               id="filter_{{ filter.id }}"
                                class="form-control report-filter"
-                               data-filter-id="{{ filter.filter_id }}"
-                               data-filter-type="{{ filter.filter_type }}"
+                               data-filter-id="{{ filter.id }}"
+                               data-filter-type="{{ filter_type }}"
                                data-column="{{ filter.column }}"
-                               value="{{ filter.default_value or '' }}">
+                               value="{{ filter.default_value or '' }}"
+                               aria-label="Select {{ filter.label }} date">
                     {% else %}
                         <input type="text"
-                               id="filter_{{ filter.filter_id }}"
+                               id="filter_{{ filter.id }}"
                                class="form-control report-filter"
-                               data-filter-id="{{ filter.filter_id }}"
-                               data-filter-type="{{ filter.filter_type }}"
+                               data-filter-id="{{ filter.id }}"
+                               data-filter-type="{{ filter_type }}"
                                data-column="{{ filter.column }}"
                                placeholder="Search..."
-                               value="{{ filter.default_value or '' }}">
+                               value="{{ filter.default_value or '' }}"
+                               aria-label="Filter {{ filter.label }}">
                     {% endif %}
                 </div>
                 {% endfor %}
                 <div class="filter-control">
                     <label>&nbsp;</label>
-                    <button class="btn btn-outline-secondary w-100" onclick="clearAllFilters()">
-                        <i class="fas fa-times"></i> Clear Filters
+                    <button class="btn btn-outline-secondary w-100" onclick="clearAllFilters()" aria-label="Clear all filters">
+                        <i class="fas fa-times" aria-hidden="true"></i> Clear Filters
                     </button>
                 </div>
             </div>
@@ -158,7 +235,7 @@
         {% endif %}
 
         <!-- Widget Container -->
-        <div class="widget-container">
+        <section id="widgets" class="widget-container" role="region" aria-label="Dashboard widgets">
             {% for widget in widgets %}
             <div class="widget-card" data-widget-id="{{ widget.widget_id }}">
                 <div class="widget-header">
@@ -166,14 +243,16 @@
                     <div class="widget-actions">
                         <button class="widget-action-btn refresh-widget"
                                 data-widget-id="{{ widget.widget_id }}"
-                                title="Refresh">
+                                title="Refresh"
+                                aria-label="Refresh widget {{ widget.title }}">
                             <i class="fas fa-sync-alt"></i>
                         </button>
                         {% if widget.widget_type == 'chart' %}
                         <button class="widget-action-btn export-widget"
                                 data-widget-id="{{ widget.widget_id }}"
                                 data-format="png"
-                                title="Export as PNG">
+                                title="Export as PNG"
+                                aria-label="Export chart {{ widget.title }} as PNG">
                             <i class="fas fa-image"></i>
                         </button>
                         {% endif %}
@@ -181,13 +260,15 @@
                         <button class="widget-action-btn export-widget"
                                 data-widget-id="{{ widget.widget_id }}"
                                 data-format="csv"
-                                title="Export as CSV">
+                                title="Export as CSV"
+                                aria-label="Export table {{ widget.title }} as CSV">
                             <i class="fas fa-file-csv"></i>
                         </button>
                         {% endif %}
                         <button class="widget-action-btn fullscreen-widget"
                                 data-widget-id="{{ widget.widget_id }}"
-                                title="Full Screen">
+                                title="Full Screen"
+                                aria-label="Toggle fullscreen for {{ widget.title }}">
                             <i class="fas fa-expand"></i>
                         </button>
                     </div>
@@ -208,7 +289,7 @@
                         </div>
 
                     {% elif widget.widget_type == 'chart' %}
-                        <div class="chart-widget"
+                        <div class="chart-widget chart-container"
                              data-widget-id="{{ widget.widget_id }}"
                              data-chart-data="{{ json_dumps(widget.data)|safe }}"
                              data-chart-options="{{ json_dumps(widget.options)|safe }}">
@@ -216,7 +297,7 @@
                         </div>
 
                     {% elif widget.widget_type == 'table' %}
-                        <div class="table-widget"
+                        <div class="table-widget data-table"
                              data-widget-id="{{ widget.widget_id }}"
                              data-table-options="{{ json_dumps(widget.options)|safe }}">
                             <table class="table table-striped table-hover">
@@ -262,11 +343,11 @@
                 </div>
             </div>
             {% endfor %}
-        </div>
+        </section>
 
         {% if executive_summary and executive_summary.critical_issues %}
         <!-- Critical Issues Section -->
-        <div class="widget-card">
+        <div id="findings" class="widget-card" role="region" aria-label="Critical issues">
             <div class="widget-header">
                 <h6 class="widget-title text-danger">
                     <i class="fas fa-exclamation-triangle me-2"></i>Critical Issues Requiring Attention
@@ -299,7 +380,7 @@
 
         {% if executive_summary and executive_summary.recommendations %}
         <!-- Recommendations Section -->
-        <div class="widget-card">
+        <div id="recommendations" class="widget-card" role="region" aria-label="Recommendations">
             <div class="widget-header">
                 <h6 class="widget-title text-primary">
                     <i class="fas fa-lightbulb me-2"></i>Recommendations
@@ -332,7 +413,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 
     <!-- Interactive Report JavaScript -->
-    <script>
+    <script defer>
         {{ interactive_js|safe }}
 
         // Additional dashboard-specific functions

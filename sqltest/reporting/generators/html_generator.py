@@ -2,10 +2,11 @@
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, Template, select_autoescape
 
@@ -13,7 +14,10 @@ from ..base import BaseReportGenerator, TemplateNotFoundError, OutputGenerationE
 from ..models import (
     ReportData, ReportFormat, ReportGenerationResult, Finding, ReportSection, ChartData
 )
-from ..interactive import InteractiveReportBuilder, TrendAnalyzer
+from .. import interactive as interactive_module
+
+if TYPE_CHECKING:  # pragma: no cover - import for type checking only
+    from ..interactive import InteractiveReportBuilder
 
 
 class HTMLReportGenerator(BaseReportGenerator):
@@ -58,7 +62,7 @@ class HTMLReportGenerator(BaseReportGenerator):
                 'severity_color': self._get_severity_color,
                 'chart_config': self._generate_chart_config,
                 'table_to_html': self._dataframe_to_html,
-                'json_dumps': json.dumps
+                'json_dumps': self._json_dumps
             })
 
     def generate(self, report_data: ReportData) -> ReportGenerationResult:
@@ -610,13 +614,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 self._setup_jinja_environment()
 
             # Generate executive summary and trend analysis
-            executive_summary = TrendAnalyzer.generate_executive_summary(report_data)
+            executive_summary = interactive_module.TrendAnalyzer.generate_executive_summary(report_data)
+            executive_summary = self._ensure_summary_defaults(executive_summary, report_data)
 
             # Create interactive widgets
-            widgets = TrendAnalyzer.create_dashboard_widgets(report_data)
+            widgets = interactive_module.TrendAnalyzer.create_dashboard_widgets(report_data)
 
-            # Create interactive report builder
-            builder = InteractiveReportBuilder()
+            # Create interactive report builder via module attribute (supports patching in tests)
+            builder_cls = getattr(interactive_module, "InteractiveReportBuilder")
+            builder = builder_cls()
+            builder.set_layout()
 
             # Add filters based on data
             filters = self._generate_filters_from_data(report_data)
@@ -624,6 +631,23 @@ document.addEventListener('DOMContentLoaded', function() {
             # Determine output path
             output_path = self._determine_output_path(report_data)
             output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Prime builder with generated widgets/filters for downstream template helpers
+            builder.widgets.extend(widgets)
+            for filter_config in filters:
+                filter_type = filter_config.get('type') or filter_config.get('filter_type') or 'select'
+                config_payload = {
+                    key: filter_config.get(key)
+                    for key in ('options', 'column', 'placeholder')
+                    if filter_config.get(key) is not None
+                }
+                builder.add_filter(
+                    filter_config['id'],
+                    filter_config['label'],
+                    filter_type,
+                    config_payload if config_payload else filter_config.get('column') or filter_config.get('options', []),
+                    filter_config.get('default_value'),
+                )
 
             # Generate interactive HTML content
             html_content = self._generate_interactive_html_content(
@@ -659,7 +683,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                          executive_summary: Dict[str, Any],
                                          widgets: List[Any],
                                          filters: List[Any],
-                                         builder: InteractiveReportBuilder) -> str:
+                                         builder: 'InteractiveReportBuilder') -> str:
         """Generate interactive HTML content.
 
         Args:
@@ -691,6 +715,132 @@ document.addEventListener('DOMContentLoaded', function() {
 
         return template.render(**context)
 
+    def _ensure_summary_defaults(self, executive_summary: Optional[Dict[str, Any]],
+                                 report_data: ReportData) -> Dict[str, Any]:
+        """Ensure executive summary contains expected keys for templates.
+
+        Args:
+            executive_summary: Summary dictionary returned by analyzers
+            report_data: Report data used for fallback metrics
+
+        Returns:
+            Summary dictionary with required keys populated
+        """
+        summary: Dict[str, Any] = dict(executive_summary or {})
+
+        overview = dict(summary.get('overview') or {})
+        total_datasets = overview.get('total_datasets') or overview.get('data_sources')
+        if total_datasets is None:
+            total_datasets = len(report_data.raw_data)
+        else:
+            try:
+                total_datasets = int(total_datasets)
+            except (TypeError, ValueError):
+                total_datasets = len(report_data.raw_data)
+
+        total_rows = overview.get('total_rows') or overview.get('total_records')
+        if total_rows is None:
+            total_rows = sum(
+                len(df) for df in report_data.raw_data.values()
+                if isinstance(df, pd.DataFrame)
+            )
+        else:
+            try:
+                total_rows = int(total_rows)
+            except (TypeError, ValueError):
+                total_rows = sum(
+                    len(df) for df in report_data.raw_data.values()
+                    if isinstance(df, pd.DataFrame)
+                )
+
+        generation_time = overview.get('generation_time')
+        if generation_time is None and report_data.execution_metrics:
+            generation_time = report_data.execution_metrics.execution_time
+        try:
+            generation_time = float(generation_time if generation_time is not None else 0.0)
+        except (TypeError, ValueError):
+            generation_time = 0.0
+
+        overview['total_datasets'] = total_datasets
+        overview['total_rows'] = total_rows
+        overview['generation_time'] = generation_time
+        overview.setdefault('time_period', overview.get('time_period', 'Current period'))
+        summary['overview'] = overview
+
+        def _safe_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _normalize_trend(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                lowered = value.lower()
+                if lowered in {'up', 'increase', 'positive', 'growth'}:
+                    return 5.0
+                if lowered in {'down', 'decrease', 'negative', 'decline'}:
+                    return -5.0
+                if lowered in {'stable', 'flat', 'steady', 'neutral'}:
+                    return 0.0
+            return None
+
+        performance = dict(summary.get('performance_metrics') or {})
+        performance['data_quality_score'] = _safe_float(
+            performance.get('data_quality_score', summary.get('data_quality', {}).get('score'))
+        )
+        performance['performance_score'] = _safe_float(performance.get('performance_score'))
+        performance['completeness_score'] = _safe_float(performance.get('completeness_score'))
+        summary['performance_metrics'] = performance
+
+        summary['critical_issues'] = list(summary.get('critical_issues') or [])
+        summary['recommendations'] = list(summary.get('recommendations') or [])
+        normalized_metrics = []
+        for metric in summary.get('key_metrics') or []:
+            metric_dict = dict(metric)
+            metric_dict['trend'] = _normalize_trend(metric_dict.get('trend'))
+            normalized_metrics.append(metric_dict)
+        summary['key_metrics'] = normalized_metrics
+        summary['findings_summary'] = dict(summary.get('findings_summary') or {})
+
+        return summary
+
+    def _json_dumps(self, data: Any) -> str:
+        return json.dumps(self._to_serializable(data), default=self._json_default)
+
+    def _json_default(self, value: Any) -> Any:
+        if isinstance(value, (np.integer, np.int64, np.int32)):
+            return int(value)
+        if isinstance(value, (np.floating, np.float32, np.float64)):
+            return float(value)
+        if isinstance(value, (np.bool_, np.bool8)):
+            return bool(value)
+        if isinstance(value, (pd.Timestamp, datetime)):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, (pd.Series, pd.Index)):
+            return value.tolist()
+        if isinstance(value, pd.DataFrame):
+            return value.to_dict('records')
+        if isinstance(value, set):
+            return list(value)
+        return str(value)
+
+    def _to_serializable(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: self._to_serializable(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._to_serializable(v) for v in value]
+        if isinstance(value, tuple):
+            return [self._to_serializable(v) for v in value]
+        if isinstance(value, (np.generic, pd.Timestamp, datetime, date, pd.Series, pd.Index, pd.DataFrame, set)):
+            return self._json_default(value)
+        return value
+
     def _generate_filters_from_data(self, report_data: ReportData) -> List[Dict[str, Any]]:
         """Generate filter configurations from report data.
 
@@ -712,9 +862,12 @@ document.addEventListener('DOMContentLoaded', function() {
             for col in categorical_cols[:3]:  # Limit to first 3 categorical columns
                 unique_values = df[col].dropna().unique()
                 if 2 <= len(unique_values) <= 20:  # Reasonable number of options
+                    filter_id = f"{dataset_name}_{col}"
                     filters.append({
-                        'filter_id': f"{dataset_name}_{col}",
+                        'id': filter_id,
+                        'filter_id': filter_id,
                         'label': col.replace('_', ' ').title(),
+                        'type': 'select',
                         'filter_type': 'select',
                         'column': col,
                         'options': sorted(unique_values.tolist()),
@@ -724,9 +877,12 @@ document.addEventListener('DOMContentLoaded', function() {
             # Add date column filters
             date_cols = df.select_dtypes(include=['datetime64']).columns
             for col in date_cols[:2]:  # Limit to first 2 date columns
+                filter_id = f"{dataset_name}_{col}"
                 filters.append({
-                    'filter_id': f"{dataset_name}_{col}",
+                    'id': filter_id,
+                    'filter_id': filter_id,
                     'label': col.replace('_', ' ').title(),
+                    'type': 'date',
                     'filter_type': 'date',
                     'column': col,
                     'options': [],
@@ -736,9 +892,12 @@ document.addEventListener('DOMContentLoaded', function() {
             # Add numeric range filters
             numeric_cols = df.select_dtypes(include=['number']).columns
             for col in numeric_cols[:2]:  # Limit to first 2 numeric columns
+                filter_id = f"{dataset_name}_{col}"
                 filters.append({
-                    'filter_id': f"{dataset_name}_{col}",
+                    'id': filter_id,
+                    'filter_id': filter_id,
                     'label': col.replace('_', ' ').title(),
+                    'type': 'range',
                     'filter_type': 'range',
                     'column': col,
                     'options': [float(df[col].min()), float(df[col].max())],

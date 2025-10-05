@@ -181,6 +181,24 @@ databases:
 - `mssql` - Microsoft SQL Server 2012+
 - `snowflake` - Snowflake Cloud Data Warehouse
 
+### CLI Database Tools
+
+Use the `sqltest db` commands to inspect connectivity and schemas without leaving the terminal:
+
+```bash
+# Check connection status and pool activity
+sqltest db status --config sqltest.yaml
+
+# List tables and views in the configured database
+sqltest db tables --database production
+sqltest db views --database production
+
+# Describe a table with column metadata, nullability, and key information
+sqltest db describe users --database production
+```
+
+Every describe output includes a column detail grid and row counts so you can verify structures before running validations or profiling.
+
 ### Advanced Connection Pooling
 
 ```yaml
@@ -320,6 +338,7 @@ The profiler generates:
 
 - **Statistical Metrics**: Mean, median, mode, std dev, min, max, percentiles
 - **Data Quality Scores**: Completeness, uniqueness, validity
+- **Column Analysis Summary**: Per-column null percentages, uniqueness coverage, and quality scoring for quick triage
 - **Pattern Detection**: Common patterns, regex suggestions
 - **Outlier Identification**: Statistical outliers with z-scores
 - **Distribution Analysis**: Histograms and frequency tables
@@ -859,6 +878,8 @@ sqltest report --type html --output report.html
 # Executive dashboard
 sqltest report --type executive --output dashboard.html
 ```
+
+Interactive dashboards ship with filter controls, Chart.js visualizations, DataTables-powered grids, ARIA-labelled navigation, and export buttons (`csv`/`png`). All assets are loaded with `defer` hints so large datasets remain responsive on modern browsers.
 
 #### JSON Reports
 

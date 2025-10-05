@@ -62,7 +62,7 @@ class ConnectionPoolConfig(BaseModel):
             raise ValueError("min_connections must be <= max_connections")
 
         if self.max_overflow > self.max_connections:
-            raise ValueError("max_overflow should not exceed max_connections")
+            object.__setattr__(self, 'max_overflow', self.max_connections)
 
         if self.health_check_interval > self.max_connection_age:
             raise ValueError("health_check_interval should be less than max_connection_age")

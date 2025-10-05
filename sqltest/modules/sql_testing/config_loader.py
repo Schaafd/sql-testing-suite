@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List, Union, Tuple
 from dataclasses import dataclass
 from pydantic import BaseModel, validator, Field
 import logging
+import copy
 
 from ...config.models import DatabaseConfig
 from .models import (
@@ -39,7 +40,7 @@ class ConfigContext:
 class TestAssertionConfig(BaseModel):
     """Configuration model for test assertions."""
     type: AssertionType
-    expected: Any
+    expected: Any = None
     tolerance: Optional[float] = None
     ignore_order: bool = False
     custom_function: Optional[str] = None
@@ -97,7 +98,8 @@ class TestCaseConfig(BaseModel):
     name: str
     description: Optional[str] = None
     sql: str
-    fixtures: List[TestFixtureConfig] = Field(default_factory=list)
+    fixtures: List[Union[TestFixtureConfig, str]] = Field(default_factory=list)
+    resolved_fixtures: List[TestFixtureConfig] = Field(default_factory=list)
     assertions: List[TestAssertionConfig] = Field(default_factory=list)
     setup_sql: Optional[str] = None
     teardown_sql: Optional[str] = None
@@ -126,7 +128,11 @@ class TestCaseConfig(BaseModel):
             name=self.name,
             description=self.description or "",
             sql=self.sql,
-            fixtures=[fixture.to_dataclass() for fixture in self.fixtures],
+            fixtures=[
+                fixture.to_dataclass()
+                for fixture in self.resolved_fixtures
+                if isinstance(fixture, TestFixtureConfig)
+            ],
             assertions=[assertion.to_dataclass() for assertion in self.assertions],
             setup_sql=self.setup_sql,
             teardown_sql=self.teardown_sql,
@@ -144,7 +150,8 @@ class TestSuiteConfig(BaseModel):
     database: str
     setup_sql: Optional[str] = None
     teardown_sql: Optional[str] = None
-    fixtures: List[TestFixtureConfig] = Field(default_factory=list)
+    fixtures: List[Union[TestFixtureConfig, str]] = Field(default_factory=list)
+    resolved_fixtures: List[TestFixtureConfig] = Field(default_factory=list)
     test_cases: List[TestCaseConfig] = Field(default_factory=list)
     parallel: bool = False
     max_workers: int = 4
@@ -444,6 +451,8 @@ class AdvancedConfigLoader:
         try:
             config_data = self.template_engine.load_template(str(config_path), context)
 
+            config_data = self._resolve_references(config_data)
+
             # Validate and create schema
             config_schema = TestConfigSchema(**config_data)
 
@@ -457,6 +466,50 @@ class AdvancedConfigLoader:
         except Exception as e:
             logger.error(f"Failed to load configuration from {config_path}: {e}")
             raise ValueError(f"Configuration loading failed: {e}") from e
+
+    def _resolve_references(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve fixture references and fill assertion defaults before validation."""
+
+        resolved = copy.deepcopy(config_data)
+
+        global_fixtures = resolved.get('global_fixtures', []) or []
+        fixture_map = {
+            fixture.get('name'): fixture
+            for fixture in global_fixtures
+            if isinstance(fixture, dict) and fixture.get('name')
+        }
+
+        def resolve_fixture(entry: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+            if isinstance(entry, dict):
+                return entry
+            if isinstance(entry, str):
+                if entry not in fixture_map:
+                    raise ValueError(f"Fixture '{entry}' referenced but not defined in global_fixtures")
+                return copy.deepcopy(fixture_map[entry])
+            raise ValueError(f"Unsupported fixture reference type: {type(entry)}")
+
+        for suite in resolved.get('test_suites', []) or []:
+            if suite.get('fixtures'):
+                resolved_fixtures = [resolve_fixture(fixture) for fixture in suite['fixtures']]
+                suite['resolved_fixtures'] = resolved_fixtures
+                suite['fixtures'] = [
+                    fixture if isinstance(fixture, dict) else fixture
+                    for fixture in suite['fixtures']
+                ]
+
+            for test_case in suite.get('test_cases', []) or []:
+                if test_case.get('fixtures'):
+                    resolved_fixtures = [resolve_fixture(fixture) for fixture in test_case['fixtures']]
+                    test_case['resolved_fixtures'] = resolved_fixtures
+                    test_case['fixtures'] = [
+                        fixture if isinstance(fixture, dict) else fixture
+                        for fixture in test_case['fixtures']
+                    ]
+
+                for assertion in test_case.get('assertions', []) or []:
+                    assertion.setdefault('expected', None)
+
+        return resolved
 
     def load_from_dict(self,
                       config_data: Dict[str, Any],
@@ -482,6 +535,7 @@ class AdvancedConfigLoader:
 
         # Resolve environment variables
         resolved_data = EnvironmentVariableResolver.resolve(config_data, context)
+        resolved_data = self._resolve_references(resolved_data)
 
         # Validate and create schema
         return TestConfigSchema(**resolved_data)

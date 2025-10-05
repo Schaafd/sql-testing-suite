@@ -654,7 +654,48 @@ class EnterpriseTestExecutor:
         if method is None:
             return None
 
-        result = method(*args, **kwargs)
+        filtered_kwargs = kwargs
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature is not None:
+            parameters = signature.parameters.values()
+            accepts_var_kwargs = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters
+            )
+            if not accepts_var_kwargs:
+                allowed_names = {param.name for param in parameters}
+                filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_names}
+
+        side_effect = getattr(method, "side_effect", None)
+        if callable(side_effect):
+            try:
+                se_signature = inspect.signature(side_effect)
+            except (TypeError, ValueError):
+                se_signature = None
+            if se_signature is not None:
+                se_parameters = se_signature.parameters.values()
+                se_accepts_var_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in se_parameters
+                )
+                if not se_accepts_var_kwargs:
+                    allowed = {param.name for param in se_parameters}
+                    filtered_kwargs = {k: v for k, v in filtered_kwargs.items() if k in allowed}
+
+        try:
+            result = method(*args, **filtered_kwargs)
+        except TypeError as exc:
+            if filtered_kwargs:
+                logger.debug(
+                    "Retrying %s without unsupported kwargs due to TypeError: %s",
+                    method_name,
+                    exc,
+                )
+                result = method(*args)
+            else:
+                raise
         if inspect.isawaitable(result):
             result = await result
         return result
