@@ -4,6 +4,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union, Callable, Set
 from enum import Enum
+import uuid
 import pandas as pd
 from pydantic import BaseModel, Field, validator
 
@@ -193,7 +194,7 @@ class BusinessRulePydantic(BaseModel):
 class RuleSet:
     """Collection of business rules to be executed together."""
     name: str
-    description: str
+    description: str = ""
     rules: List[BusinessRule] = field(default_factory=list)
     dependencies: List[str] = field(default_factory=list)
     enabled: bool = True
@@ -478,6 +479,7 @@ class RuleBatch:
     """Represents a batch of rules that can be executed together for optimization."""
 
     rules: List[BusinessRule]
+    batch_id: str = field(default_factory=lambda: f"batch_{uuid.uuid4().hex[:8]}")
     max_size: int = 10
 
     def __post_init__(self):
