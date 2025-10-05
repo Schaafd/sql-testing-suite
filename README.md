@@ -134,6 +134,18 @@ sqltest validate --rules business_rules.yaml --data sales.csv
 sqltest validate --field email --rule email_format
 ```
 
+### **Business Rule Validation**
+```bash
+# Execute YAML-defined business rule sets
+sqltest business-rules --rule-set rules/business_rules.yaml --database prod
+
+# Load multiple rule sets from a directory with tag filtering
+sqltest business-rules --directory rules/ --tags finance,critical
+
+# Export rich validation results to JSON
+sqltest business-rules --rule-set rules/business_rules.yaml --output reports/business_rules.json
+```
+
 ### **SQL Unit Testing**
 ```bash
 # Execute unit test suites
@@ -149,6 +161,15 @@ sqltest test --coverage --format html
 # Schedule automated reports
 sqltest report --schedule daily --email team@company.com
 sqltest report --type technical --format pdf --output ./reports/
+```
+
+### **Project Initialization**
+```bash
+# Scaffold a new project with sample assets
+sqltest init my_sql_tests
+
+# Refresh an existing project and overwrite templates
+sqltest init my_sql_tests --force --template complete --with-validation --with-tests --with-examples
 ```
 
 ## ⚙️ Configuration

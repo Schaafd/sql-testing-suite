@@ -127,6 +127,7 @@ sql-testing-suite/
    sqltest test --help       # Command help
    sqltest report --help     # Command help
    sqltest init --help       # Command help
+   sqltest init myproj --force  # Reinitialize project assets safely
    ```
 
 2. **Package Import**:

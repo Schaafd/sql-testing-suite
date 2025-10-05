@@ -3,10 +3,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-
 import click
 import yaml
 from rich.table import Table
@@ -14,13 +13,176 @@ from rich.table import Table
 from sqltest.cli.utils import console
 from sqltest.config import create_sample_config
 
+
+@dataclass
+class InitSummary:
+    """Track filesystem actions performed during project initialization."""
+
+    project_root: Path
+    created_files: list[Path] = field(default_factory=list)
+    overwritten_files: list[Path] = field(default_factory=list)
+    skipped_files: list[Path] = field(default_factory=list)
+    created_directories: list[Path] = field(default_factory=list)
+
+    def record_file(self, path: Path, action: str) -> None:
+        getattr(self, f"{action}_files").append(path.resolve())
+
+    def record_directory(self, path: Path) -> None:
+        self.created_directories.append(path.resolve())
+
+    def describe_file(self, path: Path) -> str:
+        path = path.resolve()
+        if path in self.overwritten_files:
+            return "♻️ Overwritten"
+        if path in self.created_files:
+            return "✅ Created"
+        if path in self.skipped_files:
+            return "➖ Skipped"
+        if path.exists():
+            return "📎 Reused"
+        return "—"
+
+    def describe_directory(self, path: Path) -> str:
+        path = path.resolve()
+        if path in self.created_directories:
+            return "✅ Created"
+        if path.exists():
+            return "📎 Reused"
+        return "—"
+
+    def render(self) -> None:
+        if not any([self.created_directories, self.created_files, self.overwritten_files, self.skipped_files]):
+            return
+
+        def _rel(path: Path) -> str:
+            try:
+                return str(path.resolve().relative_to(self.project_root.resolve()))
+            except ValueError:
+                return str(path)
+
+        console.print("\n[bold cyan]Initialization Summary[/bold cyan]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Action", style="cyan")
+        table.add_column("Count", style="white", justify="right")
+        table.add_column("Paths", style="green")
+
+        if self.created_directories:
+            table.add_row(
+                "Directories created",
+                str(len(self.created_directories)),
+                ", ".join(_rel(path) for path in self.created_directories),
+            )
+        if self.created_files:
+            table.add_row(
+                "Files created",
+                str(len(self.created_files)),
+                ", ".join(_rel(path) for path in self.created_files),
+            )
+        if self.overwritten_files:
+            table.add_row(
+                "Files overwritten",
+                str(len(self.overwritten_files)),
+                ", ".join(_rel(path) for path in self.overwritten_files),
+            )
+        if self.skipped_files:
+            table.add_row(
+                "Files skipped",
+                str(len(self.skipped_files)),
+                ", ".join(_rel(path) for path in self.skipped_files),
+            )
+
+        console.print(table)
+
+
+def _ensure_directory(path: Path, summary: InitSummary) -> None:
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+        summary.record_directory(path)
+        console.print(f"📁 Created directory: [green]{path}[/green]")
+    else:
+        console.print(f"📁 Using existing directory: [cyan]{path}[/cyan]")
+
+
+def _write_path(
+    path: Path,
+    *,
+    description: str,
+    force: bool,
+    summary: InitSummary,
+    writer,
+) -> None:
+    path = path.resolve()
+    if path.exists() and not force:
+        console.print(f"[yellow]Skipped existing {description}: [cyan]{path}[/cyan]")
+        summary.record_file(path, "skipped")
+        return
+
+    if path.exists():
+        console.print(f"[yellow]Overwriting {description}: [cyan]{path}[/cyan]")
+        summary.record_file(path, "overwritten")
+    else:
+        console.print(f"[green]Created {description}: [cyan]{path}[/cyan]")
+        summary.record_file(path, "created")
+
+    with path.open("w", encoding="utf-8") as handle:
+        writer(handle)
+
+
+def _dump_yaml(
+    path: Path,
+    payload: dict,
+    *,
+    description: str,
+    force: bool,
+    summary: InitSummary,
+) -> None:
+    def _writer(handle) -> None:
+        yaml.dump(payload, handle, default_flow_style=False, sort_keys=False)
+
+    _write_path(path, description=description, force=force, summary=summary, writer=_writer)
+
+
+def _write_text(
+    path: Path,
+    content: str,
+    *,
+    description: str,
+    force: bool,
+    summary: InitSummary,
+) -> None:
+    _write_path(path, description=description, force=force, summary=summary, writer=lambda handle: handle.write(content))
+
+
+def _write_sample_config(path: Path, *, force: bool, summary: InitSummary) -> None:
+    path = path.resolve()
+    if path.exists() and not force:
+        console.print(f"[yellow]Skipped existing configuration: [cyan]{path}[/cyan]")
+        summary.record_file(path, "skipped")
+        return
+
+    if path.exists():
+        console.print(f"[yellow]Overwriting configuration: [cyan]{path}[/cyan]")
+        summary.record_file(path, "overwritten")
+    else:
+        console.print(f"[green]Created configuration: [cyan]{path}[/cyan]")
+        summary.record_file(path, "created")
+
+    create_sample_config(path)
 @click.command(name="init")
 @click.argument("project_name")
 @click.option("--template", type=click.Choice(["basic", "advanced", "complete"]), default="basic", help="Project template")
 @click.option("--with-validation", is_flag=True, help="Include sample validation rule sets")
 @click.option("--with-tests", is_flag=True, help="Include sample test configurations")
 @click.option("--with-examples", is_flag=True, help="Include example data and scenarios")
-def init_command(project_name: str, template: str, with_validation: bool, with_tests: bool, with_examples: bool) -> None:
+@click.option("--force", is_flag=True, help="Overwrite files if the target directory already exists")
+def init_command(
+    project_name: str,
+    template: str,
+    with_validation: bool,
+    with_tests: bool,
+    with_examples: bool,
+    force: bool,
+) -> None:
     """🚀 Initialize a new SQLTest Pro project.
     
     Creates a new project directory with sample configurations, validation rules,
@@ -28,83 +190,117 @@ def init_command(project_name: str, template: str, with_validation: bool, with_t
     """
     console.print(f"[bold green]Initializing project: {project_name}[/bold green]")
     console.print(f"Using template: [green]{template}[/green]")
-    
-    project_path = Path(project_name)
+
+    project_path = Path(project_name).expanduser().resolve()
+    summary = InitSummary(project_root=project_path)
+
     if project_path.exists():
-        console.print(f"[red]Error: Directory '{project_name}' already exists[/red]")
-        return
-    
-    try:
-        # Create project directory
-        project_path.mkdir(parents=True)
+        if not project_path.is_dir():
+            console.print(f"[red]Error: Path '{project_name}' exists and is not a directory[/red]")
+            raise SystemExit(1)
+        if not force:
+            console.print(
+                f"[red]Error: Directory '{project_name}' already exists. Use --force to update it.[/red]"
+            )
+            raise SystemExit(1)
+        console.print(f"[yellow]⚠️  Reusing existing project directory: {project_path}[/yellow]")
+    else:
+        project_path.mkdir(parents=True, exist_ok=True)
+        summary.record_directory(project_path)
         console.print(f"📁 Created project directory: [green]{project_path}[/green]")
-        
-        # Create sample configuration
+
+    try:
         config_path = project_path / "sqltest.yaml"
-        create_sample_config(config_path)
-        console.print(f"⚙️  Created sample configuration: [green]{config_path}[/green]")
-        
-        # Create directories
-        (project_path / "reports").mkdir()
-        (project_path / "tests").mkdir()
-        (project_path / "rules").mkdir()
-        (project_path / "templates").mkdir()
-        console.print("📂 Created project directories")
-        
-        # Determine what to include based on template and options
+        _write_sample_config(config_path, force=force, summary=summary)
+
+        # Create standard directories
+        for directory_name in ("reports", "tests", "rules", "templates"):
+            _ensure_directory(project_path / directory_name, summary)
+
+        # Determine inclusions based on template and flags
         include_validation = with_validation or template in ["advanced", "complete"]
         include_tests = with_tests or template in ["advanced", "complete"]
         include_examples = with_examples or template == "complete"
-        
-        # Create validation rule sets
+
         if include_validation:
-            create_validation_templates(project_path, template, include_examples)
-            console.print(f"✅ Created validation rule templates")
-        
-        # Create test configurations
+            create_validation_templates(
+                project_path,
+                template,
+                include_examples,
+                force=force,
+                summary=summary,
+            )
+
         if include_tests:
-            create_test_templates(project_path, template, include_examples)
-            console.print(f"🧪 Created test configuration templates")
-        
-        # Create example data and documentation
+            create_test_templates(
+                project_path,
+                template,
+                include_examples,
+                force=force,
+                summary=summary,
+            )
+
         if include_examples:
-            create_example_data(project_path)
-            console.print(f"📊 Created example data and scenarios")
-        
-        # Create documentation
-        create_project_documentation(project_path, template, include_validation, include_tests, include_examples)
-        console.print(f"📚 Created project documentation")
-        
+            create_example_data(project_path, force=force, summary=summary)
+
+        create_project_documentation(
+            project_path,
+            template,
+            include_validation,
+            include_tests,
+            include_examples,
+            force=force,
+            summary=summary,
+        )
+
         console.print(f"\n[bold green]✅ Project '{project_name}' initialized successfully![/bold green]")
-        
-        # Show what was created
-        show_project_summary(project_path, template, include_validation, include_tests, include_examples)
-        
-        # Show next steps
+
+        show_project_summary(
+            project_path,
+            template,
+            include_validation,
+            include_tests,
+            include_examples,
+            summary,
+        )
+
+        summary.render()
+
         console.print(f"\n[bold yellow]Next Steps:[/bold yellow]")
         console.print(f"1. Edit [cyan]{config_path}[/cyan] to configure your databases")
-        console.print(f"2. Set required environment variables (see README.md)")
-        console.print(f"3. Test your configuration: [cyan]sqltest config validate[/cyan]")
-        console.print(f"4. Test database connection: [cyan]sqltest db test[/cyan]")
-        
+        console.print("2. Set required environment variables (see README.md)")
+        console.print("3. Test configuration: [cyan]sqltest config validate[/cyan]")
+        console.print("4. Test database connection: [cyan]sqltest db test[/cyan]")
+
+        step_index = 5
         if include_validation:
-            console.print(f"5. Customize validation rules in [cyan]rules/[/cyan] directory")
-            console.print(f"6. Run validation: [cyan]sqltest validate --config rules/data_quality_rules.yaml[/cyan]")
-        
+            console.print(f"{step_index}. Customize validation rules in [cyan]rules/[/cyan]")
+            console.print(f"{step_index + 1}. Run validation: [cyan]sqltest validate --config rules/data_quality_rules.yaml[/cyan]")
+            step_index += 2
+
         if include_tests:
-            console.print(f"5. Customize test cases in [cyan]tests/[/cyan] directory")
-            console.print(f"6. Run tests: [cyan]sqltest test --directory tests/[/cyan]")
-        
+            console.print(f"{step_index}. Customize test cases in [cyan]tests/[/cyan]")
+            console.print(f"{step_index + 1}. Run tests: [cyan]sqltest test --directory tests/[/cyan]")
+            step_index += 2
+
         if include_examples:
-            console.print(f"7. Explore example scenarios in [cyan]examples/[/cyan] directory")
-        
+            console.print(f"{step_index}. Explore example scenarios in [cyan]examples/[/cyan]")
+
     except Exception as e:
         console.print(f"[red]Error creating project: {e}[/red]")
+        raise SystemExit(1) from e
 
 
 
 # Project template creation functions
-def create_validation_templates(project_path: Path, template: str, include_examples: bool) -> None:
+def create_validation_templates(
+    project_path: Path,
+    template: str,
+    include_examples: bool,
+    *,
+    force: bool,
+    summary: InitSummary,
+) -> None:
     """Create validation rule templates."""
     rules_dir = project_path / "rules"
     
@@ -168,8 +364,13 @@ def create_validation_templates(project_path: Path, template: str, include_examp
     }
     
     # Write data quality rules
-    with open(rules_dir / "data_quality_rules.yaml", 'w') as f:
-        yaml.dump(data_quality_rules, f, default_flow_style=False, sort_keys=False)
+    _dump_yaml(
+        rules_dir / "data_quality_rules.yaml",
+        data_quality_rules,
+        description="data quality rules",
+        force=force,
+        summary=summary,
+    )
     
     # Referential integrity rules for advanced templates
     if template in ["advanced", "complete"]:
@@ -214,8 +415,13 @@ def create_validation_templates(project_path: Path, template: str, include_examp
             ]
         }
         
-        with open(rules_dir / "referential_integrity_rules.yaml", 'w') as f:
-            yaml.dump(referential_rules, f, default_flow_style=False, sort_keys=False)
+        _dump_yaml(
+            rules_dir / "referential_integrity_rules.yaml",
+            referential_rules,
+            description="referential integrity rules",
+            force=force,
+            summary=summary,
+        )
     
     # Business logic rules for complete template
     if template == "complete" or include_examples:
@@ -266,11 +472,23 @@ def create_validation_templates(project_path: Path, template: str, include_examp
             ]
         }
         
-        with open(rules_dir / "business_logic_rules.yaml", 'w') as f:
-            yaml.dump(business_rules, f, default_flow_style=False, sort_keys=False)
+        _dump_yaml(
+            rules_dir / "business_logic_rules.yaml",
+            business_rules,
+            description="business logic rules",
+            force=force,
+            summary=summary,
+        )
 
 
-def create_test_templates(project_path: Path, template: str, include_examples: bool) -> None:
+def create_test_templates(
+    project_path: Path,
+    template: str,
+    include_examples: bool,
+    *,
+    force: bool,
+    summary: InitSummary,
+) -> None:
     """Create test configuration templates."""
     tests_dir = project_path / "tests"
     
@@ -352,8 +570,13 @@ def create_test_templates(project_path: Path, template: str, include_examples: b
         ]
     }
     
-    with open(tests_dir / "unit_tests.yaml", 'w') as f:
-        yaml.dump(unit_tests, f, default_flow_style=False, sort_keys=False)
+    _dump_yaml(
+        tests_dir / "unit_tests.yaml",
+        unit_tests,
+        description="unit test templates",
+        force=force,
+        summary=summary,
+    )
     
     # Integration tests for advanced templates
     if template in ["advanced", "complete"]:
@@ -440,8 +663,13 @@ def create_test_templates(project_path: Path, template: str, include_examples: b
             ]
         }
         
-        with open(tests_dir / "integration_tests.yaml", 'w') as f:
-            yaml.dump(integration_tests, f, default_flow_style=False, sort_keys=False)
+        _dump_yaml(
+            tests_dir / "integration_tests.yaml",
+            integration_tests,
+            description="integration test templates",
+            force=force,
+            summary=summary,
+        )
     
     # Performance tests for complete template
     if template == "complete" or include_examples:
@@ -483,27 +711,35 @@ def create_test_templates(project_path: Path, template: str, include_examples: b
             ]
         }
         
-        with open(tests_dir / "performance_tests.yaml", 'w') as f:
-            yaml.dump(performance_tests, f, default_flow_style=False, sort_keys=False)
+        _dump_yaml(
+            tests_dir / "performance_tests.yaml",
+            performance_tests,
+            description="performance test templates",
+            force=force,
+            summary=summary,
+        )
 
 
-def create_example_data(project_path: Path) -> None:
+def create_example_data(project_path: Path, *, force: bool, summary: InitSummary) -> None:
     """Create example data and scenarios."""
     examples_dir = project_path / "examples"
-    examples_dir.mkdir(exist_ok=True)
-    
-    # Sample data files
+    _ensure_directory(examples_dir, summary)
+
     sample_users_csv = """id,name,email,created_at,status
 1,John Doe,john@example.com,2023-01-15 10:30:00,active
 2,Jane Smith,jane@example.com,2023-01-16 14:20:00,active
 3,Bob Johnson,bob@example.com,2023-01-17 09:15:00,inactive
 4,Alice Brown,alice@example.com,2023-01-18 16:45:00,active
 5,Charlie Wilson,charlie@example.com,2023-01-19 11:30:00,pending"""
-    
-    with open(examples_dir / "sample_users.csv", 'w') as f:
-        f.write(sample_users_csv)
-    
-    # Sample schema creation script
+
+    _write_text(
+        examples_dir / "sample_users.csv",
+        sample_users_csv,
+        description="sample users CSV",
+        force=force,
+        summary=summary,
+    )
+
     schema_sql = """
 -- Example database schema for SQLTest Pro
 -- This creates a simple e-commerce-like schema for demonstration
@@ -558,11 +794,15 @@ INSERT INTO products (name, description, price, stock_quantity) VALUES
 ('Gadget X', 'A revolutionary gadget', 25.00, 25)
 ON CONFLICT DO NOTHING;
 """
-    
-    with open(examples_dir / "sample_schema.sql", 'w') as f:
-        f.write(schema_sql)
-    
-    # Sample scenarios documentation
+
+    _write_text(
+        examples_dir / "sample_schema.sql",
+        schema_sql,
+        description="sample schema SQL",
+        force=force,
+        summary=summary,
+    )
+
     scenarios_md = """
 # Example Test Scenarios
 
@@ -617,13 +857,26 @@ Feel free to modify these examples to match your specific:
 - Data quality requirements
 - Performance expectations
 """
-    
-    with open(examples_dir / "README.md", 'w') as f:
-        f.write(scenarios_md)
+
+    _write_text(
+        examples_dir / "README.md",
+        scenarios_md,
+        description="examples README",
+        force=force,
+        summary=summary,
+    )
 
 
-def create_project_documentation(project_path: Path, template: str, include_validation: bool, 
-                                include_tests: bool, include_examples: bool) -> None:
+def create_project_documentation(
+    project_path: Path,
+    template: str,
+    include_validation: bool,
+    include_tests: bool,
+    include_examples: bool,
+    *,
+    force: bool,
+    summary: InitSummary,
+) -> None:
     """Create project documentation."""
     
     readme_content = f"""
@@ -863,43 +1116,107 @@ If you need help:
 **Happy Testing!** 🎉
 """
     
-    with open(project_path / "README.md", 'w') as f:
-        f.write(readme_content)
+    _write_text(
+        project_path / "README.md",
+        readme_content,
+        description="project README",
+        force=force,
+        summary=summary,
+    )
 
 
-def show_project_summary(project_path: Path, template: str, include_validation: bool, 
-                        include_tests: bool, include_examples: bool) -> None:
+def show_project_summary(
+    project_path: Path,
+    template: str,
+    include_validation: bool,
+    include_tests: bool,
+    include_examples: bool,
+    summary: InitSummary,
+) -> None:
     """Show summary of what was created."""
+
+    def _rel(path: Path) -> str:
+        try:
+            return path.resolve().relative_to(project_path.resolve()).as_posix()
+        except ValueError:
+            return str(path)
+
+    def _aggregate_status(statuses) -> str:
+        cleaned = [status for status in statuses if status != "—"]
+        if not cleaned:
+            return "—"
+        unique = sorted(set(cleaned))
+        return unique[0] if len(unique) == 1 else " / ".join(unique)
+
     console.print(f"\n[bold cyan]📋 Project Summary[/bold cyan]")
-    
+
     summary_table = Table(show_header=True, header_style="bold magenta")
     summary_table.add_column("Component", style="cyan")
     summary_table.add_column("Status", style="green")
-    summary_table.add_column("Files Created", style="white")
-    
-    summary_table.add_row("Configuration", "✅ Created", "sqltest.yaml")
-    summary_table.add_row("Documentation", "✅ Created", "README.md")
-    summary_table.add_row("Directories", "✅ Created", "reports/, templates/")
-    
+    summary_table.add_column("Files", style="white")
+
+    config_path = project_path / "sqltest.yaml"
+    summary_table.add_row(
+        "Configuration",
+        summary.describe_file(config_path),
+        _rel(config_path),
+    )
+
+    readme_path = project_path / "README.md"
+    summary_table.add_row(
+        "Documentation",
+        summary.describe_file(readme_path),
+        _rel(readme_path),
+    )
+
+    directory_paths = [project_path / name for name in ("reports", "tests", "rules", "templates")]
+    directory_status = _aggregate_status(summary.describe_directory(path) for path in directory_paths)
+    summary_table.add_row(
+        "Directories",
+        directory_status,
+        ", ".join(_rel(path) + "/" for path in directory_paths),
+    )
+
     if include_validation:
-        files = "data_quality_rules.yaml"
+        validation_files = [project_path / "rules" / "data_quality_rules.yaml"]
         if template in ["advanced", "complete"]:
-            files += ", referential_integrity_rules.yaml"
+            validation_files.append(project_path / "rules" / "referential_integrity_rules.yaml")
         if template == "complete":
-            files += ", business_logic_rules.yaml"
-        summary_table.add_row("Validation Rules", "✅ Created", files)
-    
+            validation_files.append(project_path / "rules" / "business_logic_rules.yaml")
+        summary_table.add_row(
+            "Validation Rules",
+            _aggregate_status(summary.describe_file(path) for path in validation_files),
+            ", ".join(_rel(path) for path in validation_files),
+        )
+    else:
+        summary_table.add_row("Validation Rules", "Not included", "—")
+
     if include_tests:
-        files = "unit_tests.yaml"
+        test_files = [project_path / "tests" / "unit_tests.yaml"]
         if template in ["advanced", "complete"]:
-            files += ", integration_tests.yaml"
+            test_files.append(project_path / "tests" / "integration_tests.yaml")
         if template == "complete":
-            files += ", performance_tests.yaml"
-        summary_table.add_row("Test Configurations", "✅ Created", files)
-    
+            test_files.append(project_path / "tests" / "performance_tests.yaml")
+        summary_table.add_row(
+            "Test Configurations",
+            _aggregate_status(summary.describe_file(path) for path in test_files),
+            ", ".join(_rel(path) for path in test_files),
+        )
+    else:
+        summary_table.add_row("Test Configurations", "Not included", "—")
+
     if include_examples:
-        summary_table.add_row("Example Data", "✅ Created", "sample_schema.sql, sample_users.csv")
-    
+        example_files = [
+            project_path / "examples" / "sample_schema.sql",
+            project_path / "examples" / "sample_users.csv",
+            project_path / "examples" / "README.md",
+        ]
+        summary_table.add_row(
+            "Example Data",
+            _aggregate_status(summary.describe_file(path) for path in example_files),
+            ", ".join(_rel(path) for path in example_files),
+        )
+    else:
+        summary_table.add_row("Example Data", "Not included", "—")
+
     console.print(summary_table)
-
-

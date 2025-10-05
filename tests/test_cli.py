@@ -159,6 +159,7 @@ class TestCLIBasic:
         assert result.exit_code == 0
         assert 'SQLTest Pro' in result.output
         assert 'comprehensive SQL testing' in result.output
+        assert 'business-rules' in result.output
     
     def test_cli_version(self):
         """Test that CLI shows version."""
@@ -379,18 +380,32 @@ class TestCLIProject:
             assert (project_path / 'tests').exists()
     
     def test_init_existing_project(self):
-        """Test initializing a project in existing directory."""
+        """Test initializing a project in existing directory without force flag."""
         runner = CliRunner()
         
         with tempfile.TemporaryDirectory() as temp_dir:
             existing_dir = Path(temp_dir) / 'existing'
             existing_dir.mkdir()
-            
+            (existing_dir / 'sqltest.yaml').write_text('placeholder')
+
             result = runner.invoke(cli, ['init', str(existing_dir)])
+            assert result.exit_code == 1
+            assert 'already exists' in result.output
+            assert '--force' in result.output
+
+    def test_init_existing_project_with_force(self):
+        """Test re-initializing in existing directory with --force."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            existing_dir = Path(temp_dir) / 'existing'
+            existing_dir.mkdir()
+            (existing_dir / 'sqltest.yaml').write_text('placeholder')
+
+            result = runner.invoke(cli, ['init', str(existing_dir), '--force'])
             assert result.exit_code == 0
-            # Normalize whitespace to handle line breaks in error messages
-            normalized_output = ' '.join(result.output.split())
-            assert 'already exists' in normalized_output
+            assert 'initialized successfully' in result.output
+            assert 'Initialization Summary' in result.output
 
 
 class TestCLIErrorHandling:
